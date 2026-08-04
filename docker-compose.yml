@@ -1,0 +1,19 @@
+# Publishes the API on the host (port map binds beyond container localhost).
+# Prefer accessing only from your machine, or set SAND_API_TOKEN and send
+# Authorization: Bearer <token> (or X-SAND-Token) on API requests.
+services:
+  sand:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - sand-data:/data
+    environment:
+      SAND_DATA_DIR: /data
+      SAND_API_TOKEN: ${SAND_API_TOKEN:-}
+      SAND_LLM_BASE_URL: ${SAND_LLM_BASE_URL:-https://api.openai.com/v1}
+      SAND_LLM_API_KEY: ${SAND_LLM_API_KEY:-}
+      SAND_LLM_MODEL: ${SAND_LLM_MODEL:-gpt-4o-mini}
+
+volumes:
+  sand-data:

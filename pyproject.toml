@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sand"
+version = "0.1.0"
+description = "Spreadsheets Are Not Databases — turn spreadsheets into a queryable DB with chat and charts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.0",
+    "xlrd>=2.0.0",
+    "duckdb>=1.1.0",
+    "plotly>=5.24.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pyarrow>=15.0.0"]
+
+[project.scripts]
+sand = "sand.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sand = ["web/*", "samples/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,2 +1,17 @@
 .git
 build/
+.venv/
+.sand-venv/
+venv/
+.sand/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+dist/
+*.db
+*.duckdb
+.env
+
+# Prefer pyproject.toml; requirements.txt is a lock-style compile for Docker/pip only
