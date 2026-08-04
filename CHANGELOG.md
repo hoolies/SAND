@@ -2,6 +2,35 @@
 
 All notable changes to SAND are documented here.
 
+## [0.9.3] — 2026-08-04
+
+### Added
+- Recipe **Load** into the Join form (edit multi-step plans without rebuilding)
+- Upload/import **Cancel** (aborts in-flight XHR)
+- Multi-step **JoinPlan** estimate (`POST /query/join/estimate` with `plan`)
+- SQL tab table/column insert helpers
+- CLI: `sand list`, `sand join --recipe` / `--plan`
+- Join request optional `write` flag (explicit write; still inferred from `as_table` / recipe save)
+- `/docs`, `/openapi.json`, `/redoc` reachable without API token
+
+### Changed
+- Multi-step joins run as **nested SQL** (no TEMP intermediates)
+- README documents rename, rows peek, checkpoint, RO-by-default, CLI surface
+
+## [0.9.2] — 2026-08-04
+
+### Added
+- Join cancel: track DuckDB queries + Cancel/Esc on the Join tab (same as SQL/Chat)
+
+### Changed
+- Connections default to **read-only**; write opens only when materializing (`as_table`), saving/deleting recipes/views, ingest, renames, checkpoints, type apply, etc.
+- Multi-step join plans use TEMP tables so preview works without a write lock
+- Running a saved recipe no longer re-writes the recipe row (save-on-run only when join/plan is sent with a name)
+- API token check uses `hmac.compare_digest`
+
+### Fixed
+- Join-plan intermediate tables are dropped on failure (no leftover `tmp_join_*`)
+
 ## [0.9.1] — 2026-08-04
 
 ### Added

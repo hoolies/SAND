@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
 
 from sand.db.duckdb_client import DuckDBClient
-from sand.queries.joins import JoinSpec, build_join_sql
+from sand.queries.joins import JoinPlan, JoinSpec, build_join_sql, build_nested_join_plan_sql
 
 _ID_HINT = re.compile(r"(^id$|_id$|id$|code$|key$|sku$|uuid$)", re.IGNORECASE)
 
@@ -178,5 +178,102 @@ def estimate_join(client: DuckDBClient, spec: JoinSpec) -> JoinEstimate:
         matched_right=matched_right,
         multiplicity=multiplicity,
         warning=warning,
+        sql_preview=sql_preview,
+    )
+
+
+class JoinPlanEstimate(BaseModel):
+    steps: list[JoinEstimate]
+    final_estimated_rows: int | None = None
+    warning: str | None = None
+    sql_preview: str | None = None
+
+
+def estimate_join_plan(client: DuckDBClient, plan: JoinPlan) -> JoinPlanEstimate:
+    """Estimate each step; later steps use prior estimated_rows as left cardinality."""
+    if len(plan.steps) == 1:
+        one = estimate_join(client, plan.steps[0])
+        return JoinPlanEstimate(
+            steps=[one],
+            final_estimated_rows=one.estimated_rows,
+            warning=one.warning,
+            sql_preview=one.sql_preview,
+        )
+
+    step_estimates: list[JoinEstimate] = []
+    warnings: list[str] = []
+    prev_rows: int | None = None
+
+    for i, step in enumerate(plan.steps):
+        if i == 0:
+            est = estimate_join(client, step)
+            prev_rows = est.estimated_rows if est.estimated_rows is not None else est.left_rows
+            step_estimates.append(est)
+            if est.warning:
+                warnings.append(f"Step 1: {est.warning}")
+            continue
+
+        right_rows = int(client.fetchall(f"SELECT COUNT(*) FROM {_qi(step.right)}")[0][0])
+        pairs = step.key_pairs()
+        right_expr = ", ".join(_qi(p.right) for p in pairs)
+        right_distinct = int(
+            client.fetchall(
+                f"SELECT COUNT(*) FROM (SELECT DISTINCT {right_expr} FROM {_qi(step.right)})"
+            )[0][0]
+        )
+        left_rows = int(prev_rows or 0)
+        # Heuristic when left is prior result: assume keys unique on left unless prior was m2m
+        left_distinct = left_rows
+        left_unique = True
+        right_unique = right_distinct == right_rows and right_rows > 0
+        if left_unique and right_unique:
+            multiplicity = "one_to_one"
+            estimated = min(left_rows, right_rows) if left_rows and right_rows else left_rows
+        elif left_unique and not right_unique:
+            multiplicity = "one_to_many"
+            fan = (right_rows / right_distinct) if right_distinct else 1.0
+            estimated = int(left_rows * fan) if left_rows else 0
+        elif not left_unique and right_unique:
+            multiplicity = "many_to_one"
+            estimated = left_rows
+        else:
+            multiplicity = "many_to_many"
+            fan = (right_rows / right_distinct) if right_distinct else 1.0
+            estimated = int(left_rows * fan) if left_rows else 0
+
+        warn = None
+        if multiplicity == "many_to_many":
+            warn = (
+                f"Step {i + 1}: many-to-many risk — ~{estimated} rows from "
+                f"~{left_rows} prior × {right_rows} {step.right}."
+            )
+            warnings.append(warn)
+
+        step_estimates.append(
+            JoinEstimate(
+                left_rows=left_rows,
+                right_rows=right_rows,
+                left_distinct=left_distinct,
+                right_distinct=right_distinct,
+                estimated_rows=estimated,
+                matched_left=None,
+                matched_right=None,
+                multiplicity=multiplicity,
+                warning=warn,
+                sql_preview=None,
+            )
+        )
+        prev_rows = estimated
+
+    sql_preview = None
+    try:
+        sql_preview = build_nested_join_plan_sql(client, plan)
+    except Exception:
+        sql_preview = None
+
+    return JoinPlanEstimate(
+        steps=step_estimates,
+        final_estimated_rows=prev_rows,
+        warning="; ".join(warnings) if warnings else None,
         sql_preview=sql_preview,
     )

@@ -23,7 +23,7 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
     import sand.core.store as store_mod
 
     data_dir = tmp_path / "data"
-    settings = Settings(data_dir=data_dir, llm_api_key="", query_timeout_seconds=0.05)
+    settings = Settings(data_dir=data_dir, llm_api_key="")
     monkeypatch.setenv("SAND_DATA_DIR", str(data_dir))
     monkeypatch.setattr(config_mod, "get_settings", lambda: settings)
     monkeypatch.setattr(limits_mod, "get_settings", lambda: settings)

@@ -13,7 +13,7 @@ from sand.cli import build_parser, main
 def test_cli_subcommands_and_no_xls() -> None:
     parser = build_parser()
     help_text = parser.format_help()
-    for name in ("serve", "ingest", "join", "query", "export", "import", "rename"):
+    for name in ("serve", "ingest", "join", "query", "export", "import", "rename", "list"):
         assert name in help_text
     ingest_parser = next(
         action.choices["ingest"]
@@ -23,6 +23,14 @@ def test_cli_subcommands_and_no_xls() -> None:
     ingest_help = ingest_parser.format_help()
     assert "CSV / XLSX / Parquet" in ingest_help
     assert "XLS" not in ingest_help.replace("XLSX", "")
+    join_parser = next(
+        action.choices["join"]
+        for action in parser._actions  # noqa: SLF001
+        if getattr(action, "choices", None) and "join" in action.choices
+    )
+    join_help = join_parser.format_help()
+    assert "--recipe" in join_help
+    assert "--plan" in join_help
 
 
 def test_cli_ingest_query_export_rename(tmp_path: Path, monkeypatch) -> None:

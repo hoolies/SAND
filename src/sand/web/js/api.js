@@ -101,8 +101,8 @@ export async function apiForm(path, formData) {
 }
 
 export function apiFormWithProgress(path, formData, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise((resolve, reject) => {
     xhr.open("POST", path);
     const headers = authHeaders();
     Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
@@ -134,6 +134,9 @@ export function apiFormWithProgress(path, formData, onProgress) {
     xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")));
     xhr.send(formData);
   });
+  promise.xhr = xhr;
+  promise.abort = () => xhr.abort();
+  return promise;
 }
 
 export async function apiDelete(path) {

@@ -182,8 +182,14 @@ def load(
     path: str | Path | Sequence[str | Path],
     *,
     dataset_id: str | None = None,
+    write: bool = False,
 ) -> Dataset:
-    """Ingest one or more spreadsheets (or open an existing dataset id)."""
+    """Ingest one or more spreadsheets (or open an existing dataset id).
+
+    Opening an existing dataset id defaults to **read-only**. Pass ``write=True``
+    to materialize joins, add files, or mutate tables. Ingest paths always open
+    writable.
+    """
     from sand.db.pool import get_client
 
     settings = get_settings()
@@ -198,7 +204,7 @@ def load(
             return Dataset(result.dataset_id, client)
         store = DatasetStore(settings)
         ds_id = dataset_id or str(path)
-        client = store.open(ds_id)
+        client = store.open(ds_id, read_only=not write)
         return Dataset(ds_id, client)
 
     paths = [Path(p) for p in path]

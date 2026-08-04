@@ -1,5 +1,5 @@
 import {
-  apiGet, apiJson, apiDelete, downloadExport,
+  apiGet, apiJson, apiDelete, downloadExport, newQueryId,
 } from "./api.js";
 import {
   state, els, setError, fillSelect, columnsFor, renderPreviewTable,
@@ -8,6 +8,50 @@ import {
 import { loadSchema } from "./data.js";
 
 let extraStepIndex = 0;
+let activeAbort = null;
+let activeQueryId = null;
+
+function setJoinBusy(busy) {
+  if (els.joinBtn) els.joinBtn.disabled = busy || isDatasetLocked();
+  if (els.estimateBtn) els.estimateBtn.disabled = busy || isDatasetLocked();
+  if (els.joinCancelBtn) els.joinCancelBtn.style.display = busy ? "inline-block" : "none";
+  if (els.joinCancelBtn) els.joinCancelBtn.disabled = !busy;
+}
+
+async function cancelActiveJoin() {
+  const id = els.dataset?.value;
+  if (activeAbort) activeAbort.abort();
+  if (id && activeQueryId) {
+    try {
+      await apiJson("/chat/cancel", "POST", { dataset_id: id, query_id: activeQueryId });
+    } catch (_err) {
+      /* best-effort */
+    }
+  }
+  setJoinBusy(false);
+  setError("Join cancelled.");
+}
+
+async function withCancellableJoin(fn) {
+  if (activeAbort) activeAbort.abort();
+  activeAbort = new AbortController();
+  activeQueryId = newQueryId();
+  setJoinBusy(true);
+  setError("");
+  try {
+    return await fn(activeAbort.signal, activeQueryId);
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      setError("Join cancelled.");
+      return null;
+    }
+    throw err;
+  } finally {
+    activeAbort = null;
+    activeQueryId = null;
+    setJoinBusy(false);
+  }
+}
 
 function addKeyRow(leftCol, rightCol, container, leftIsPrev) {
   const host = container || els.keyRows;
@@ -196,6 +240,31 @@ function buildJoinSpec() {
 }
 
 function renderEstimate(estimate) {
+  if (!estimate) {
+    els.estimateResult.innerHTML = "";
+    return;
+  }
+  if (Array.isArray(estimate.steps)) {
+    const final = estimate.final_estimated_rows ?? "—";
+    const warnHtml = estimate.warning ? `<div class="warn-box">⚠ ${escapeHtml(estimate.warning)}</div>` : "";
+    const stepsHtml = estimate.steps.map((s, i) => `
+      <div class="kv-grid" style="margin-top:0.5rem;">
+        <div class="kv"><div class="label">Step ${i + 1} left</div><div class="value">${s.left_rows}</div></div>
+        <div class="kv"><div class="label">Step ${i + 1} right</div><div class="value">${s.right_rows}</div></div>
+        <div class="kv"><div class="label">Est. rows</div><div class="value">${s.estimated_rows ?? "—"}</div></div>
+        <div class="kv"><div class="label">Multiplicity</div><div class="value">${escapeHtml(s.multiplicity)}</div></div>
+      </div>
+    `).join("");
+    els.estimateResult.innerHTML = `
+      <div class="kv-grid">
+        <div class="kv"><div class="label">Final estimated rows</div><div class="value">${final}</div></div>
+        <div class="kv"><div class="label">Steps</div><div class="value">${estimate.steps.length}</div></div>
+      </div>
+      ${stepsHtml}
+      ${warnHtml}
+    `;
+    return;
+  }
   const warnHtml = estimate.warning ? `<div class="warn-box">⚠ ${escapeHtml(estimate.warning)}</div>` : "";
   els.estimateResult.innerHTML = `
     <div class="kv-grid">
@@ -259,9 +328,11 @@ async function loadRecipes() {
           ${meta ? `<div class="recipe-meta">${escapeHtml(meta)}</div>` : ""}
         </div>
         <div class="recipe-actions">
+          <button type="button" class="secondary small load-recipe">Load</button>
           <button type="button" class="secondary small run-recipe">Run</button>
           <button type="button" class="danger small" data-act="del">Delete</button>
         </div>`;
+      li.querySelector(".load-recipe").addEventListener("click", () => loadRecipeIntoForm(r));
       li.querySelector(".run-recipe").addEventListener("click", () => runRecipe(r.name));
       li.querySelector('[data-act="del"]').addEventListener("click", () => deleteRecipe(r.name));
       els.recipeList.appendChild(li);
@@ -283,12 +354,79 @@ async function deleteRecipe(name) {
   }
 }
 
+function applyJoinKeys(on, container, leftIsPrev) {
+  const host = container || els.keyRows;
+  host.innerHTML = "";
+  const keys = on || [];
+  if (!keys.length) {
+    addKeyRow("", "", host, leftIsPrev);
+    return;
+  }
+  keys.forEach((k) => {
+    if (typeof k === "string") {
+      if (k.includes("=")) {
+        const [l, r] = k.split("=", 2);
+        addKeyRow(l.trim(), r.trim(), host, leftIsPrev);
+      } else {
+        addKeyRow(k, k, host, leftIsPrev);
+      }
+    } else {
+      addKeyRow(k.left, k.right, host, leftIsPrev);
+    }
+  });
+}
+
+function loadRecipeIntoForm(recipe) {
+  setError("");
+  if (els.joinRecipeName) els.joinRecipeName.value = recipe.name || "";
+  if (els.joinSteps) els.joinSteps.innerHTML = "";
+  extraStepIndex = 0;
+
+  const plan = recipe.plan;
+  const spec = recipe.spec || (plan?.steps?.[0] || null);
+  if (!spec && !plan) {
+    setError("Recipe has no join/plan to load.");
+    return;
+  }
+  const first = plan?.steps?.[0] || spec;
+  if (els.joinLeft) els.joinLeft.value = first.left;
+  if (els.joinRight) els.joinRight.value = first.right;
+  if (els.joinHow) els.joinHow.value = first.how || "inner";
+  applyJoinKeys(first.on, els.keyRows, false);
+  refreshKeyColumnOptions();
+
+  const rest = plan?.steps?.slice(1) || [];
+  rest.forEach((step) => {
+    addJoinStepPanel();
+    const panels = els.joinSteps.querySelectorAll(".join-step-panel");
+    const panel = panels[panels.length - 1];
+    const rightSel = panel.querySelector(".step-right");
+    if (rightSel) rightSel.value = step.right;
+    applyJoinKeys(step.on, panel.querySelector(".step-key-rows"), true);
+    rightSel?.dispatchEvent(new Event("change"));
+  });
+
+  const asTable = plan?.as_table || spec?.as_table || "";
+  if (els.joinAs) els.joinAs.value = asTable;
+  els.joinStatus.textContent = `Loaded recipe "${recipe.name}" into the form — edit and Run join to save changes.`;
+  // Refresh suggestions without wiping loaded keys
+  const left = els.joinLeft.value;
+  const right = els.joinRight.value;
+  if (left && right && left !== right && els.dataset.value) {
+    apiJson("/query/join/suggest", "POST", { dataset_id: els.dataset.value, left, right })
+      .then((data) => renderJoinSuggestions(data.suggestions || []))
+      .catch(() => {});
+  }
+}
+
 async function runRecipe(name) {
   const id = requireDataset();
-  if (!id) return;
-  setError("");
+  if (!id || isDatasetLocked()) return;
   try {
-    const data = await apiJson("/query/join", "POST", { dataset_id: id, recipe_name: name });
+    const data = await withCancellableJoin((signal, queryId) =>
+      apiJson("/query/join", "POST", { dataset_id: id, recipe_name: name }, { signal, queryId }),
+    );
+    if (!data) return;
     renderJoinResult(data);
     if (data.as_table) await loadSchema();
   } catch (err) {
@@ -322,7 +460,20 @@ export function wireJoinTab() {
     setError("");
     els.estimateBtn.disabled = true;
     try {
-      const data = await apiJson("/query/join/estimate", "POST", { dataset_id: id, join: buildJoinSpec() });
+      const extraSteps = collectExtraSteps();
+      let body;
+      if (extraSteps.length) {
+        body = {
+          dataset_id: id,
+          plan: {
+            steps: [{ ...buildJoinSpec(), as_table: null, limit: null }, ...extraSteps],
+            as_table: els.joinAs.value.trim() || null,
+          },
+        };
+      } else {
+        body = { dataset_id: id, join: buildJoinSpec() };
+      }
+      const data = await apiJson("/query/join/estimate", "POST", body);
       renderEstimate(data.estimate);
     } catch (err) {
       setError(err.message || String(err));
@@ -357,10 +508,12 @@ export function wireJoinTab() {
       };
     }
     if (recipeName) body.recipe_name = recipeName;
-    setError("");
-    els.joinBtn.disabled = true;
+    if (asTable || recipeName) body.write = true;
     try {
-      const data = await apiJson("/query/join", "POST", body);
+      const data = await withCancellableJoin((signal, queryId) =>
+        apiJson("/query/join", "POST", body, { signal, queryId }),
+      );
+      if (!data) return;
       renderJoinResult(data);
       if (recipeName) {
         els.joinStatus.textContent =
@@ -370,10 +523,9 @@ export function wireJoinTab() {
       if (asTable) await loadSchema();
     } catch (err) {
       setError(err.message || String(err));
-    } finally {
-      els.joinBtn.disabled = isDatasetLocked();
     }
   });
+  els.joinCancelBtn?.addEventListener("click", () => cancelActiveJoin());
   els.exportJoinCsvBtn.addEventListener("click", () => exportJoinResult("csv"));
   els.exportJoinXlsxBtn.addEventListener("click", () => exportJoinResult("xlsx"));
   els.exportJoinParquetBtn?.addEventListener("click", () => exportJoinResult("parquet"));

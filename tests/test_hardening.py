@@ -56,7 +56,7 @@ def test_join_no_pandas_fallback_and_ctas(tmp_path: Path) -> None:
     pd.DataFrame({"id": [1], "name": ["x"]}).to_csv(right, index=False)
     db = tmp_path / "j.duckdb"
     ingest_files([left, right], dataset_id="j", db_path=db)
-    client = get_client(db)
+    client = get_client(db, read_only=False)
     df, sql = execute_join(
         client,
         JoinSpec(left="a", right="b", on=["id"], how="inner", as_table="joined"),
@@ -185,7 +185,7 @@ def test_parquet_and_xlsx_native(tmp_path: Path) -> None:
     db = tmp_path / "mix.duckdb"
     result = ingest_files([pq, xlsx], dataset_id="mix", db_path=db)
     assert {t.name for t in result.tables} >= {"facts", "sales"}
-    client = get_client(db)
+    client = get_client(db, read_only=False)
     assert int(client.fetchall("SELECT COUNT(*) FROM facts")[0][0]) == 2
     assert int(client.fetchall("SELECT COUNT(*) FROM sales")[0][0]) == 2
     client.checkpoint()

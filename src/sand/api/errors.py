@@ -27,7 +27,7 @@ def open_dataset(
     dataset_id: str,
     *,
     store: DatasetStore | None = None,
-    read_only: bool = False,
+    read_only: bool = True,
 ) -> DuckDBClient:
     store = store or DatasetStore()
     try:
@@ -49,11 +49,14 @@ def dataset_client(
     dataset_id: str,
     *,
     store: DatasetStore | None = None,
-    read_only: bool = False,
+    read_only: bool = True,
     track: bool = False,
     query_id: str | None = None,
 ) -> Iterator[DuckDBClient]:
     """Open a dataset and close ephemeral read-only connections on exit.
+
+    Defaults to **read-only**. Pass ``read_only=False`` only for explicit writes
+    (ingest, materialize, recipes, renames, checkpoints, …).
 
     When ``track=True``, the connection is registered so ``POST /chat/cancel``
     (or dataset interrupt) can call DuckDB ``interrupt()``.

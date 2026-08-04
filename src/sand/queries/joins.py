@@ -23,6 +23,22 @@ def _qi(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _relation_columns(client: DuckDBClient, table: str) -> set[str]:
+    """Column names for a base or TEMP relation (UI schema() hides temps / ``_sand_*``)."""
+    rows = client.fetchall(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = ?
+        ORDER BY ordinal_position
+        """,
+        (table,),
+    )
+    if not rows:
+        raise ValueError(f"Unknown table: {table}")
+    return {str(r[0]) for r in rows}
+
+
 class JoinKey(BaseModel):
     """Map a left-table column to a right-table column."""
 
@@ -84,19 +100,39 @@ class JoinPlan(BaseModel):
         return self
 
 
-def build_join_sql(client: DuckDBClient, spec: JoinSpec, *, alias_left: str = "t0", alias_right: str = "t1") -> str:
-    schema = client.schema()
-    if spec.left not in schema:
-        raise ValueError(f"Unknown left table: {spec.left}")
-    if spec.right not in schema:
-        raise ValueError(f"Unknown right table: {spec.right}")
+def build_join_sql_with_cols(
+    client: DuckDBClient,
+    spec: JoinSpec,
+    *,
+    left_relation_sql: str | None = None,
+    left_columns: set[str] | list[str] | None = None,
+    alias_left: str = "t0",
+    alias_right: str = "t1",
+) -> tuple[str, list[str]]:
+    """Build join SQL and the output column names (order matches SELECT)."""
+    if left_relation_sql is not None:
+        if left_columns is None:
+            raise ValueError("left_columns required when left_relation_sql is set")
+        left_cols = set(left_columns)
+        left_from = f"({left_relation_sql}) AS {alias_left}"
+        left_label = spec.left if spec.left not in {"__prev__", ""} else "__prev__"
+    else:
+        try:
+            left_cols = _relation_columns(client, spec.left)
+        except ValueError as exc:
+            raise ValueError(f"Unknown left table: {spec.left}") from exc
+        left_from = f"{_qi(spec.left)} AS {alias_left}"
+        left_label = spec.left
 
-    left_cols = {c["name"] for c in schema[spec.left]}
-    right_cols = {c["name"] for c in schema[spec.right]}
+    try:
+        right_cols = _relation_columns(client, spec.right)
+    except ValueError as exc:
+        raise ValueError(f"Unknown right table: {spec.right}") from exc
+
     pairs = spec.key_pairs()
     for pair in pairs:
         if pair.left not in left_cols:
-            raise ValueError(f"Column {pair.left!r} not in left table {spec.left}")
+            raise ValueError(f"Column {pair.left!r} not in left table {left_label}")
         if pair.right not in right_cols:
             raise ValueError(f"Column {pair.right!r} not in right table {spec.right}")
 
@@ -108,25 +144,60 @@ def build_join_sql(client: DuckDBClient, spec: JoinSpec, *, alias_left: str = "t
         f"{alias_left}.{_qi(p.left)} = {alias_right}.{_qi(p.right)}" for p in pairs
     )
 
+    out_cols: list[str] = []
     if spec.select:
-        select_sql = ", ".join(_resolve_select(col, alias_left, alias_right) for col in spec.select)
+        select_parts: list[str] = []
+        for col in spec.select:
+            part = _resolve_select(col, alias_left, alias_right)
+            select_parts.append(part)
+            # best-effort output name from AS clause
+            if " AS " in part.upper():
+                out_cols.append(part.rsplit(" AS ", 1)[-1].strip().strip('"'))
+            else:
+                out_cols.append(col.split(".")[-1])
+        select_sql = ", ".join(select_parts)
     else:
-        # Qualify all columns; rename collisions on the right side.
         left_select = [f"{alias_left}.{_qi(c)} AS {_qi(c)}" for c in sorted(left_cols)]
+        out_cols.extend(sorted(left_cols))
         right_select = []
         for c in sorted(right_cols):
             if c in left_cols:
-                right_select.append(f"{alias_right}.{_qi(c)} AS {_qi(f'{spec.right}__{c}')}")
+                alias = f"{spec.right}__{c}"
+                right_select.append(f"{alias_right}.{_qi(c)} AS {_qi(alias)}")
+                out_cols.append(alias)
             else:
                 right_select.append(f"{alias_right}.{_qi(c)} AS {_qi(c)}")
+                out_cols.append(c)
         select_sql = ", ".join(left_select + right_select)
 
     sql = (
-        f"SELECT {select_sql} FROM {_qi(spec.left)} AS {alias_left} "
+        f"SELECT {select_sql} FROM {left_from} "
         f"{join_sql} {_qi(spec.right)} AS {alias_right} ON {on_clause}"
     )
     if spec.limit is not None:
         sql += f" LIMIT {int(spec.limit)}"
+    return sql, out_cols
+
+
+def build_join_sql(client: DuckDBClient, spec: JoinSpec, *, alias_left: str = "t0", alias_right: str = "t1") -> str:
+    sql, _ = build_join_sql_with_cols(client, spec, alias_left=alias_left, alias_right=alias_right)
+    return sql
+
+
+def build_nested_join_plan_sql(client: DuckDBClient, plan: JoinPlan) -> str:
+    """Single nested SELECT for a multi-step plan (no TEMP tables)."""
+    if not plan.steps:
+        raise ValueError("Join plan has no steps")
+    first = plan.steps[0].model_copy(update={"as_table": None, "limit": None})
+    sql, cols = build_join_sql_with_cols(client, first)
+    for step in plan.steps[1:]:
+        rewritten = step.model_copy(update={"left": "__prev__", "as_table": None, "limit": None})
+        sql, cols = build_join_sql_with_cols(
+            client,
+            rewritten,
+            left_relation_sql=sql,
+            left_columns=cols,
+        )
     return sql
 
 
@@ -175,7 +246,7 @@ def execute_join(client: DuckDBClient, spec: JoinSpec) -> tuple[pd.DataFrame, st
 
 
 def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFrame, str]:
-    """Execute a chain of joins using in-DB temp tables (no pandas fallback)."""
+    """Execute a chain of joins as nested SQL (no TEMP / no leftover tables)."""
     if len(plan.steps) == 1:
         step = plan.steps[0]
         if plan.as_table and not step.as_table:
@@ -187,36 +258,15 @@ def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFram
     from sand.core.limits import guard_result_rows, limits_from_settings
 
     limits = limits_from_settings()
-    sqls: list[str] = []
-    # Avoid ``_sand_*`` names: table_names()/schema() hide that prefix, and
-    # sanitize_table_name strips leading underscores.
-    temp_name = "tmp_join_0"
-    first = plan.steps[0].model_copy(update={"as_table": None, "limit": None})
-    sql = build_join_sql(client, first)
-    guard_result_rows(client, sql, max_rows=limits.max_materialize_rows, action="join plan step")
-    client.execute(f'CREATE OR REPLACE TABLE "{temp_name}" AS {sql}')
-    sqls.append(sql)
-
-    for i, step in enumerate(plan.steps[1:], start=1):
-        next_temp = f"tmp_join_{i}"
-        left = temp_name if step.left in {"__prev__", temp_name} or step.left.startswith("tmp_join_") else step.left
-        rewritten = step.model_copy(update={"left": left, "as_table": None, "limit": None})
-        sql = build_join_sql(client, rewritten)
-        guard_result_rows(client, sql, max_rows=limits.max_materialize_rows, action="join plan step")
-        client.execute(f'CREATE OR REPLACE TABLE "{next_temp}" AS {sql}')
-        sqls.append(sql)
-        try:
-            client.execute(f'DROP TABLE IF EXISTS "{temp_name}"')
-        except Exception:
-            pass
-        temp_name = next_temp
-
-    final_sql = " ;\n".join(sqls)
+    nested = build_nested_join_plan_sql(client, plan)
     as_table = plan.as_table or plan.steps[-1].as_table
+
     if as_table:
         name = sanitize_table_name(as_table)
-        client.execute(f'CREATE OR REPLACE TABLE "{name}" AS SELECT * FROM "{temp_name}"')
-        n = int(client.fetchall(f'SELECT COUNT(*) FROM "{name}"')[0][0])
+        n = guard_result_rows(
+            client, nested, max_rows=limits.max_materialize_rows, action="join plan materialize"
+        )
+        client.create_table_as(name, nested)
         client.register_table(
             name,
             source_file="join",
@@ -224,18 +274,12 @@ def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFram
             original_columns=[c["name"] for c in client.schema().get(name, [])],
             row_count=n,
         )
-        out_table = name
-    else:
-        out_table = temp_name
+        limit = plan.limit or min(500, limits.max_result_rows)
+        preview_sql = f'SELECT * FROM "{name}" LIMIT {int(limit)}'
+        guard_result_rows(client, preview_sql, max_rows=limits.max_result_rows, action="join plan preview")
+        return client.to_dataframe(preview_sql), nested
 
     limit = plan.limit or 500
-    preview_sql = f'SELECT * FROM "{out_table}" LIMIT {int(limit)}'
+    preview_sql = f"SELECT * FROM ({nested}) AS _sand_plan LIMIT {int(limit)}"
     guard_result_rows(client, preview_sql, max_rows=limits.max_result_rows, action="join plan preview")
-    df = client.to_dataframe(preview_sql)
-
-    for i in range(len(plan.steps)):
-        try:
-            client.execute(f'DROP TABLE IF EXISTS "tmp_join_{i}"')
-        except Exception:
-            pass
-    return df, final_sql
+    return client.to_dataframe(preview_sql), nested

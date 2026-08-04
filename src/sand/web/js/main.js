@@ -65,7 +65,7 @@ function isTypingInField(el) {
 }
 
 function clickVisibleCancelButtons() {
-  [els.sqlCancelBtn, els.cancelQueryBtn].forEach((btn) => {
+  [els.sqlCancelBtn, els.cancelQueryBtn, els.joinCancelBtn, els.uploadCancelBtn].forEach((btn) => {
     if (btn && btn.offsetParent !== null && !btn.disabled) btn.click();
   });
 }

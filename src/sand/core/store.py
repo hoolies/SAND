@@ -71,7 +71,7 @@ class DatasetStore:
             raise FileNotFoundError(f"Dataset not found: {dataset_id}")
         return path
 
-    def open(self, dataset_id: str, *, read_only: bool = False) -> DuckDBClient:
+    def open(self, dataset_id: str, *, read_only: bool = True) -> DuckDBClient:
         return get_client(self.get_path(dataset_id), read_only=read_only)
 
     def exists(self, dataset_id: str) -> bool:

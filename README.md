@@ -20,12 +20,14 @@ sand ingest sales.csv customers.csv --dataset shop
 # Join with an explicit key mapping (shared name, or left=right)
 sand join --dataset shop --left sales --right customers --on cust_id=id --how left --as-table sales_enriched
 
-# Read-only SQL (no LLM), export, or rename
+# Read-only SQL (no LLM), export, list, or rename
+sand list
 sand query --dataset shop --sql "SELECT * FROM sales_enriched LIMIT 20"
 sand export --dataset shop --table sales_enriched --out out.csv
+# sand join --dataset shop --recipe sales-with-customers
 # sand rename --dataset shop --new-id store
 
-# Start API + chat UI (OpenAPI at /docs)
+# Start API + chat UI (OpenAPI at /docs — open without token; API calls still need Bearer when set)
 sand serve
 # → http://127.0.0.1:8765
 ```
@@ -65,6 +67,8 @@ from sand.jupyter import load
 
 ds = load(["sales.csv", "customers.csv"], dataset_id="shop")
 ds.add("products.csv")
+# Open existing ids read-only by default; pass write=True to mutate
+# ds = load("shop", write=True)
 ds.join("sales", "customers", on="cust_id=id", how="left", as_table="enriched")
 ds.profile("enriched")
 ds.chart(sql="SELECT region, SUM(amount) AS total FROM enriched GROUP BY region")
@@ -72,12 +76,12 @@ ds.chart(sql="SELECT region, SUM(amount) AS total FROM enriched GROUP BY region"
 
 ## Website workflow (`sand serve`)
 
-1. **Data** — multi-upload (CSV/XLSX/Parquet), Excel sheet picker, import `.duckdb`, load sample shop, schema browser (profile + lineage), review/apply column types, rename/drop tables, export CSV/XLSX/Parquet/DuckDB, duplicate/delete datasets
-2. **Join** — auto-suggested keys, multi-step join plans, row-count estimate + many-to-many warnings, saved join recipes (run/delete), preview + export
-3. **SQL** — run DuckDB SQL directly (no LLM), preview/full run, chart + export
+1. **Data** — multi-upload (CSV/XLSX/Parquet) with drag-drop + cancel, Excel sheet picker, import `.duckdb`, load sample shop, schema browser (profile + lineage + row peek), review/apply column types, rename/drop tables, rename/duplicate/delete datasets, checkpoint, export CSV/XLSX/Parquet/DuckDB
+2. **Join** — auto-suggested keys, multi-step join plans, step-aware estimate, saved recipes (load/run/delete), cancel long joins, preview + export
+3. **SQL** — run DuckDB SQL directly (no LLM), table/column insert helpers, preview/full run, chart + export
 4. **Chat & charts** — conversation memory per dataset, editable/rerunnable SQL, filter + offline asks, always evaluates with `LIMIT 10` first, then optional full run. Charts use a **locally vendored** Plotly.js (refreshed from the CDN when online).
 
-UI state (active dataset + tab) persists in `localStorage` across refreshes.
+UI state (active dataset + tab) persists in `localStorage` across refreshes. Connections are **read-only by default**; writes happen only for ingest, materialize (`as_table`), recipe/view saves, renames, checkpoints, etc.
 
 ## API (selected)
 
@@ -90,12 +94,15 @@ UI state (active dataset + tab) persists in `localStorage` across refreshes.
 | POST | `/datasets/import` | Import an existing `.duckdb` file |
 | POST | `/datasets/samples/shop` | Load demo dataset |
 | GET | `/datasets/{id}/schema` | Schema + table `lineage` (source file, sheet, row count) |
+| GET | `/datasets/{id}/rows/{table}` | Paginated sample rows (Data tab peek) |
 | GET | `/datasets/{id}/profile/{table}` | Column profile + samples |
 | GET/POST | `/datasets/{id}/types/{table}` | Infer / apply Pydantic-validated types |
+| POST | `/datasets/{id}/rename` | Rename dataset id (moves `.duckdb` + chat sidecar) |
+| POST | `/datasets/{id}/checkpoint` | Flush WAL for safe copy/backup |
 | POST | `/query/sql` | Run read-only SQL without an LLM (preview/full + chart) |
 | POST | `/query/join/suggest` | Join key suggestions |
-| POST | `/query/join/estimate` | Cardinality + fan-out warning |
-| POST | `/query/join` | Run join or multi-step `plan` (+ optional recipe save) |
+| POST | `/query/join/estimate` | Cardinality + fan-out warning (`join` or multi-step `plan`) |
+| POST | `/query/join` | Run join or multi-step `plan` (+ optional recipe save; optional `write`) |
 | GET/POST/DELETE | `/query/join/recipes...` | Persist join recipes |
 | POST | `/chat` | NL→SQL (preview `LIMIT 10` first); 503 if no LLM |
 | POST | `/chat/cancel` | Interrupt in-flight DuckDB query (best-effort) |
@@ -103,6 +110,7 @@ UI state (active dataset + tab) persists in `localStorage` across refreshes.
 | GET/POST/DELETE | `/chat/views...` | Saved SQL views (optional cache + over-cap charts) |
 | GET/DELETE | `/chat/{id}/history` | Chat memory |
 | POST | `/export/{csv\|xlsx\|parquet\|db}` | Export table/SQL result or whole `.duckdb` file |
+| GET | `/docs` | OpenAPI UI (no token required; API calls still need Bearer when configured) |
 
 Datasets are stored under `.sand/data/<id>.duckdb`. Chat history is a sidecar `.sand/data/<id>.chat.jsonl` so asks can open DuckDB read-only. Dataset ids are sanitized to `[A-Za-z0-9_-]` (max 64); path separators / `..` are rejected. Uploads are size-capped (`SAND_MAX_INGEST_BYTES`, default 200 MB) while streaming to disk. Join materialize / export / full chat results are row-capped (`SAND_MAX_*_ROWS`). Offline asks (`top_n` / `groupby` / `filter`) are capped by `SAND_MAX_OFFLINE_ASK_ROWS` (default 10 000).
 
@@ -149,7 +157,7 @@ tests/
 
 ## Versioning
 
-Current release: **0.9.1** — see [CHANGELOG.md](CHANGELOG.md)
+Current release: **0.9.3** — see [CHANGELOG.md](CHANGELOG.md)
 
 - Patch `0.0.1` — small fixes, hardening, refactors that do not change API/behavior contracts
 - Minor `0.1.0` — new features, or changes that break callers/API/CLI

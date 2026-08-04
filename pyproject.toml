@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sand"
-version = "0.9.1"
+version = "0.9.3"
 description = "Spreadsheets Are Not Databases — turn spreadsheets into a queryable DB with chat and charts"
 readme = "README.md"
 requires-python = ">=3.11"

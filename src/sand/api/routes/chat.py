@@ -186,7 +186,7 @@ def views_list(dataset_id: str) -> dict:
 @router.post("/views")
 def views_save(body: ViewSaveRequest) -> dict:
     try:
-        client = open_dataset(body.dataset_id)
+        client = open_dataset(body.dataset_id, read_only=False)
         view = save_view(
             client,
             body.name,
@@ -254,7 +254,7 @@ def views_run(
             payload["view"] = view.model_dump()
 
         if view.cache_enabled and (body.refresh_cache or body.use_cache):
-            write_client = open_dataset(body.dataset_id, store=store)
+            write_client = open_dataset(body.dataset_id, store=store, read_only=False)
             try:
                 set_view_cache(
                     write_client,
@@ -283,7 +283,7 @@ def views_run(
 @router.delete("/views/{dataset_id}/{name}/cache")
 def views_clear_cache(dataset_id: str, name: str) -> dict:
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         if get_view(client, name) is None:
             raise HTTPException(status_code=404, detail=error_detail("not_found", "View not found"))
         clear_view_cache(client, name)
@@ -297,7 +297,7 @@ def views_clear_cache(dataset_id: str, name: str) -> dict:
 @router.delete("/views/{dataset_id}/{name}")
 def views_delete(dataset_id: str, name: str) -> dict:
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         ok = delete_view(client, name)
     except HTTPException:
         raise

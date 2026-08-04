@@ -76,8 +76,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 def cmd_join(args: argparse.Namespace) -> int:
     from sand.core.config import get_settings
+    from sand.core.dataset_meta import get_recipe
     from sand.db.pool import DatabaseLockedError, close_client, get_client
-    from sand.queries.joins import JoinKey, JoinSpec, execute_join
+    from sand.queries.joins import JoinKey, JoinPlan, JoinSpec, execute_join, execute_join_plan
 
     settings = get_settings()
     db_path = settings.db_path(args.dataset)
@@ -85,34 +86,95 @@ def cmd_join(args: argparse.Namespace) -> int:
         print(f"Dataset not found: {args.dataset}", file=sys.stderr)
         return 1
 
-    on: list[str | JoinKey] = list(args.on)
-    spec = JoinSpec(
-        left=args.left,
-        right=args.right,
-        on=on,
-        how=args.how,
-        as_table=args.as_table,
-        limit=args.limit,
-    )
+    plan: JoinPlan | None = None
+    spec: JoinSpec | None = None
+    as_table = args.as_table
+
+    if args.plan:
+        plan = JoinPlan.model_validate(json.loads(Path(args.plan).read_text(encoding="utf-8")))
+        if as_table and not plan.as_table:
+            plan = plan.model_copy(update={"as_table": as_table})
+        as_table = plan.as_table
+    elif args.recipe:
+        peek = get_client(db_path, read_only=True)
+        try:
+            recipe = get_recipe(peek, args.recipe)
+        finally:
+            if peek.owns_connection:
+                peek.close()
+            else:
+                close_client(db_path)
+        if recipe is None:
+            print(f"Unknown recipe: {args.recipe}", file=sys.stderr)
+            return 1
+        if recipe.plan is not None:
+            plan = recipe.plan
+            if as_table and not plan.as_table:
+                plan = plan.model_copy(update={"as_table": as_table})
+            as_table = plan.as_table
+        else:
+            spec = recipe.spec
+            if spec is None:
+                print(f"Recipe has no join spec: {args.recipe}", file=sys.stderr)
+                return 1
+            if as_table:
+                spec = spec.model_copy(update={"as_table": as_table})
+            as_table = spec.as_table
+    else:
+        if not args.left or not args.right or not args.on:
+            print("Provide --left/--right/--on, or --recipe, or --plan", file=sys.stderr)
+            return 1
+        on: list[str | JoinKey] = list(args.on)
+        spec = JoinSpec(
+            left=args.left,
+            right=args.right,
+            on=on,
+            how=args.how,
+            as_table=as_table,
+            limit=args.limit,
+        )
+
     try:
-        client = get_client(db_path, read_only=False)
+        client = get_client(db_path, read_only=not bool(as_table))
     except DatabaseLockedError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     try:
-        df, sql = execute_join(client, spec)
-        if args.as_table:
+        if plan is not None:
+            df, sql = execute_join_plan(client, plan)
+        else:
+            assert spec is not None
+            df, sql = execute_join(client, spec)
+        if as_table:
             client.checkpoint()
     finally:
-        close_client(db_path)
+        if client.owns_connection:
+            client.close()
+        else:
+            close_client(db_path)
     print(sql)
     print(f"Rows: {len(df)}")
-    if args.as_table:
-        print(f"Materialized as table: {args.as_table}")
+    if as_table:
+        print(f"Materialized as table: {as_table}")
     if args.preview:
         print(df.head(args.preview).to_string(index=False))
     if args.json:
         print(json.dumps(df.head(args.preview or 20).to_dict(orient="records"), default=str))
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    from sand.core.config import get_settings
+    from sand.core.store import DatasetStore
+
+    store = DatasetStore(get_settings())
+    datasets = store.list_datasets()
+    if not datasets:
+        print("No datasets found.")
+        return 0
+    for d in datasets:
+        tables = ", ".join(d.tables) if d.tables else "(none)"
+        print(f"{d.id}\t{d.db_path}\t{tables}")
     return 0
 
 
@@ -275,20 +337,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     join = sub.add_parser("join", help="Join two tables in a dataset")
     join.add_argument("--dataset", required=True, help="Dataset id")
-    join.add_argument("--left", required=True, help="Left table name")
-    join.add_argument("--right", required=True, help="Right table name")
+    join.add_argument("--left", default=None, help="Left table name")
+    join.add_argument("--right", default=None, help="Right table name")
     join.add_argument(
         "--on",
         action="append",
-        required=True,
+        default=None,
         help="Join key: shared name, or left=right (repeat for composite keys)",
     )
     join.add_argument("--how", default="inner", choices=["inner", "left", "right", "full"])
     join.add_argument("--as-table", dest="as_table", default=None, help="Save join as a new table")
+    join.add_argument("--recipe", default=None, help="Run a saved join recipe by name")
+    join.add_argument("--plan", default=None, help="Path to a JoinPlan JSON file")
     join.add_argument("--limit", type=int, default=None)
     join.add_argument("--preview", type=int, default=10, help="Print N preview rows")
     join.add_argument("--json", action="store_true", help="Also print preview as JSON")
     join.set_defaults(func=cmd_join)
+
+    listing = sub.add_parser("list", help="List datasets and their tables")
+    listing.set_defaults(func=cmd_list)
 
     query = sub.add_parser("query", help="Run read-only SQL against a dataset (no LLM)")
     query.add_argument("--dataset", required=True)

@@ -1,6 +1,7 @@
 import { apiJson, downloadExport, newQueryId } from "./api.js";
 import {
   state, els, setError, renderPreviewTable, escapeHtml, requireDataset, isDatasetLocked,
+  fillSelect, columnsFor,
 } from "./state.js";
 
 let activeAbort = null;
@@ -143,6 +144,32 @@ export function refreshSqlTab() {
   } else if (els.sqlInput) {
     els.sqlInput.placeholder = "SELECT region, SUM(amount) AS total FROM sales GROUP BY region";
   }
+  refreshSqlInsertPickers();
+}
+
+function refreshSqlInsertPickers() {
+  if (!els.sqlInsertTable) return;
+  fillSelect(els.sqlInsertTable, state.tables, els.sqlInsertTable.value || state.tables[0]);
+  const cols = columnsFor(els.sqlInsertTable.value);
+  fillSelect(els.sqlInsertColumn, cols, els.sqlInsertColumn?.value || cols[0]);
+}
+
+function insertAtCursor(textarea, text) {
+  if (!textarea) return;
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? start;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  const needsSpace = before && !/\s$/.test(before) && !/^[\s,)]/.test(text);
+  const chunk = (needsSpace ? " " : "") + text;
+  textarea.value = before + chunk + after;
+  const pos = before.length + chunk.length;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+}
+
+function quoteIdent(name) {
+  return `"${String(name).replaceAll('"', '""')}"`;
 }
 
 export function wireSqlTab() {
@@ -152,4 +179,16 @@ export function wireSqlTab() {
   els.exportSqlCsvBtn?.addEventListener("click", () => exportSqlResult("csv"));
   els.exportSqlXlsxBtn?.addEventListener("click", () => exportSqlResult("xlsx"));
   els.exportSqlParquetBtn?.addEventListener("click", () => exportSqlResult("parquet"));
+  els.sqlInsertTable?.addEventListener("change", () => {
+    const cols = columnsFor(els.sqlInsertTable.value);
+    fillSelect(els.sqlInsertColumn, cols, cols[0]);
+  });
+  els.sqlInsertTableBtn?.addEventListener("click", () => {
+    const t = els.sqlInsertTable?.value;
+    if (t) insertAtCursor(els.sqlInput, quoteIdent(t));
+  });
+  els.sqlInsertColumnBtn?.addEventListener("click", () => {
+    const c = els.sqlInsertColumn?.value;
+    if (c) insertAtCursor(els.sqlInput, quoteIdent(c));
+  });
 }

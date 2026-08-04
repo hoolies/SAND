@@ -21,8 +21,11 @@ def _key(path: Path) -> str:
     return str(path.resolve())
 
 
-def get_client(path: Path, *, read_only: bool = False) -> DuckDBClient:
+def get_client(path: Path, *, read_only: bool = True) -> DuckDBClient:
     """Return a cached write client, or an ephemeral read-only client.
+
+    Defaults to **read-only**. Pass ``read_only=False`` for writes (ingest,
+    materialize, recipes, …).
 
     Read-only opens avoid taking a write lock when this process has not already
     opened the dataset for writing. If a write client is already pooled, it is

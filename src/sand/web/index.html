@@ -76,6 +76,7 @@
           <div class="btn-row">
             <button id="upload-btn" type="button">Ingest</button>
             <button class="secondary" id="add-btn" type="button">Add to selected dataset</button>
+            <button class="secondary" id="upload-cancel-btn" type="button" style="display:none;">Cancel upload</button>
             <button class="secondary" id="sample-btn" type="button">Load sample shop</button>
           </div>
           <p class="ok" id="upload-status"></p>
@@ -216,13 +217,14 @@
           <div class="btn-row">
             <button class="secondary" id="estimate-btn" type="button">Estimate</button>
             <button id="join-btn" type="button">Run join</button>
+            <button class="secondary" id="join-cancel-btn" type="button" style="display:none;">Cancel</button>
           </div>
           <p class="ok" id="join-status"></p>
           <div id="estimate-result"></div>
         </div>
         <div class="panel stack">
           <h2>Saved recipes</h2>
-          <p class="hint">Run or delete saved recipes. New recipes are saved when you Run join with a name.</p>
+          <p class="hint">Run, load into the form, or delete saved recipes. New recipes are saved when you Run join with a name.</p>
           <ul class="recipe-list" id="recipe-list"></ul>
           <p class="empty-state" id="recipe-empty">No saved recipes for this dataset yet.</p>
         </div>
@@ -251,6 +253,20 @@
           <p class="hint">No LLM required — write DuckDB SQL directly.</p>
           <label for="sql-input">SQL</label>
           <textarea id="sql-input" rows="6" placeholder="SELECT region, SUM(amount) AS total FROM sales GROUP BY region"></textarea>
+          <div class="row" id="sql-insert-row">
+            <div>
+              <label for="sql-insert-table">Insert table</label>
+              <select id="sql-insert-table"></select>
+            </div>
+            <div>
+              <label for="sql-insert-column">Insert column</label>
+              <select id="sql-insert-column"></select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="secondary small" id="sql-insert-table-btn" type="button">Insert table</button>
+            <button class="secondary small" id="sql-insert-column-btn" type="button">Insert column</button>
+          </div>
           <label for="sql-chart-type">Chart type (optional)</label>
           <select id="sql-chart-type">
             <option value="">Best practice (auto)</option>

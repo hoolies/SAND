@@ -11,6 +11,24 @@ export function setAfterSchemaLoad(fn) { afterSchemaLoad = fn; }
 
 const PEEK_PAGE = 50;
 let peekOffset = 0;
+let activeUpload = null;
+
+function setUploadBusy(busy) {
+  if (els.uploadBtn) els.uploadBtn.disabled = busy;
+  if (els.addBtn) els.addBtn.disabled = busy;
+  if (els.uploadCancelBtn) {
+    els.uploadCancelBtn.style.display = busy ? "inline-block" : "none";
+    els.uploadCancelBtn.disabled = !busy;
+  }
+}
+
+function cancelActiveUpload() {
+  if (activeUpload?.abort) activeUpload.abort();
+  activeUpload = null;
+  setUploadBusy(false);
+  els.uploadStatus.textContent = "";
+  setError("Upload cancelled.");
+}
 
 async function checkpointBeforeDestructive() {
   const id = els.dataset.value;
@@ -424,6 +442,7 @@ async function uploadFiles({ append }) {
     return;
   }
   const replace = els.replace.checked;
+  setUploadBusy(true);
 
   try {
     if (append) {
@@ -437,11 +456,13 @@ async function uploadFiles({ append }) {
         form.append("file", f);
         form.append("replace", replace ? "true" : "false");
         appendSheetsToForm(form);
-        const data = await apiFormWithProgress(
+        const req = apiFormWithProgress(
           `/datasets/${encodeURIComponent(ds)}/tables`,
           form,
           (pct) => { els.uploadStatus.textContent = `Adding… ${pct}%`; },
         );
+        activeUpload = req;
+        const data = await req;
         lastDatasetId = data.dataset_id;
         addedCount += data.tables.length;
       }
@@ -462,9 +483,11 @@ async function uploadFiles({ append }) {
     Array.from(els.file.files).forEach((f) => form.append("files", f));
     appendSheetsToForm(form);
     els.uploadStatus.textContent = "Uploading… 0%";
-    const data = await apiFormWithProgress("/datasets/upload", form, (pct) => {
+    const req = apiFormWithProgress("/datasets/upload", form, (pct) => {
       els.uploadStatus.textContent = `Uploading… ${pct}%`;
     });
+    activeUpload = req;
+    const data = await req;
     els.uploadStatus.textContent = `Loaded ${data.tables.length} table(s) into ${data.dataset_id}: ${data.tables.map((t) => t.name).join(", ")}`;
     els.datasetId.value = data.dataset_id;
     els.file.value = "";
@@ -477,6 +500,9 @@ async function uploadFiles({ append }) {
   } catch (err) {
     setError(err.message || String(err));
     els.uploadStatus.textContent = "";
+  } finally {
+    activeUpload = null;
+    setUploadBusy(false);
   }
 }
 
@@ -643,10 +669,13 @@ export function wireDataTab() {
     const dsId = (els.importDatasetId?.value || "").trim();
     if (dsId) form.append("dataset_id", dsId);
     els.uploadStatus.textContent = "Importing…";
+    setUploadBusy(true);
     try {
-      const data = await apiFormWithProgress("/datasets/import", form, (pct) => {
+      const req = apiFormWithProgress("/datasets/import", form, (pct) => {
         els.uploadStatus.textContent = `Importing… ${pct}%`;
       });
+      activeUpload = req;
+      const data = await req;
       els.uploadStatus.textContent = `Imported ${data.tables.length} table(s) as ${data.dataset_id}`;
       els.importDuckdbFile.value = "";
       if (els.importDatasetId) els.importDatasetId.value = "";
@@ -654,9 +683,13 @@ export function wireDataTab() {
     } catch (err) {
       setError(err.message || String(err));
       els.uploadStatus.textContent = "";
+    } finally {
+      activeUpload = null;
+      setUploadBusy(false);
     }
   });
   els.uploadBtn.addEventListener("click", () => uploadFiles({ append: false }));
+  els.uploadCancelBtn?.addEventListener("click", () => cancelActiveUpload());
   els.addBtn.addEventListener("click", () => uploadFiles({ append: true }));
   els.sampleBtn.addEventListener("click", async () => {
     setError("");

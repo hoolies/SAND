@@ -469,7 +469,7 @@ def duplicate_dataset(dataset_id: str, new_id: str) -> dict:
 def checkpoint_dataset(dataset_id: str) -> dict:
     """Flush WAL into the main file (safe before copy/backup)."""
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         client.checkpoint()
     except HTTPException:
         raise
@@ -487,7 +487,7 @@ def rename_table_endpoint(dataset_id: str, table: str, body: RenameTableRequest)
     from sand.core.dataset_meta import rename_table
 
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         new_name = rename_table(client, table, body.new_name)
     except HTTPException:
         raise
@@ -501,7 +501,7 @@ def drop_table_endpoint(dataset_id: str, table: str) -> dict:
     from sand.core.dataset_meta import drop_table
 
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         drop_table(client, table)
     except HTTPException:
         raise
@@ -536,7 +536,7 @@ def apply_table_types(dataset_id: str, table: str, body: ApplyTypesBody) -> dict
     from sand.ingest.typing import ColumnTypeSpec, TableTypePlan, apply_types_sql, build_type_plan
 
     try:
-        client = open_dataset(dataset_id)
+        client = open_dataset(dataset_id, read_only=False)
         if table not in client.table_names():
             raise ValueError(f"Unknown table: {table}")
         sample = client.to_dataframe(f'SELECT * FROM "{table}" LIMIT 5000')

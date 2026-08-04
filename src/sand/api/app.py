@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 import uuid
@@ -100,18 +101,29 @@ async def request_logging(request: Request, call_next):
     return response
 
 
+def _api_token_ok(provided: str, expected: str) -> bool:
+    if not provided or not expected:
+        return False
+    try:
+        return hmac.compare_digest(provided, expected)
+    except (TypeError, ValueError):
+        return False
+
+
 @app.middleware("http")
 async def optional_api_token(request: Request, call_next):
     settings = get_settings()
     token = (settings.api_token or "").strip()
     if not token:
         return await call_next(request)
-    if request.url.path in {"/", "/health"} or request.url.path.startswith("/static"):
+    if request.url.path in {"/", "/health", "/docs", "/openapi.json", "/redoc"} or request.url.path.startswith(
+        "/static"
+    ):
         return await call_next(request)
     auth = request.headers.get("Authorization", "")
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     header_token = request.headers.get("X-SAND-Token", "").strip()
-    if bearer != token and header_token != token:
+    if not (_api_token_ok(bearer, token) or _api_token_ok(header_token, token)):
         return JSONResponse(
             status_code=401,
             content={"detail": error_detail("unauthorized", "Missing or invalid API token")},
