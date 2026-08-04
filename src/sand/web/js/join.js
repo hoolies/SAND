@@ -1,22 +1,36 @@
 import {
-  apiGet, apiJson, apiForm, apiDelete, downloadExport,
+  apiGet, apiJson, apiDelete, downloadExport,
 } from "./api.js";
 import {
   state, els, setError, fillSelect, columnsFor, renderPreviewTable,
-  escapeHtml, requireDataset, syncActiveDatasetBadges,
+  escapeHtml, requireDataset, isDatasetLocked,
 } from "./state.js";
 import { loadSchema } from "./data.js";
 
+let extraStepIndex = 0;
 
-function addKeyRow(leftCol, rightCol) {
+function addKeyRow(leftCol, rightCol, container, leftIsPrev) {
+  const host = container || els.keyRows;
   const row = document.createElement("div");
   row.className = "key-row";
-  const left = document.createElement("select");
+  const left = leftIsPrev
+    ? document.createElement("input")
+    : document.createElement("select");
   const right = document.createElement("select");
-  left.className = "key-left";
+  if (leftIsPrev) {
+    left.type = "text";
+    left.className = "key-left";
+    left.placeholder = "column from previous result";
+    if (leftCol) left.value = leftCol;
+  } else {
+    left.className = "key-left";
+    fillSelect(left, columnsFor(els.joinLeft.value), leftCol);
+  }
   right.className = "key-right";
-  fillSelect(left, columnsFor(els.joinLeft.value), leftCol);
-  fillSelect(right, columnsFor(els.joinRight.value), rightCol);
+  const rightTable = container
+    ? container.closest(".join-step-panel")?.querySelector(".step-right")?.value
+    : els.joinRight.value;
+  fillSelect(right, columnsFor(rightTable || els.joinRight.value), rightCol);
   const eq = document.createElement("div");
   eq.className = "equals";
   eq.textContent = "=";
@@ -25,10 +39,10 @@ function addKeyRow(leftCol, rightCol) {
   remove.className = "secondary";
   remove.textContent = "×";
   remove.addEventListener("click", () => {
-    if (els.keyRows.children.length > 1) row.remove();
+    if (host.children.length > 1) row.remove();
   });
   row.append(left, eq, right, remove);
-  els.keyRows.appendChild(row);
+  host.appendChild(row);
 }
 
 function refreshKeyColumnOptions() {
@@ -37,7 +51,7 @@ function refreshKeyColumnOptions() {
   els.keyRows.querySelectorAll(".key-row").forEach((row) => {
     const l = row.querySelector(".key-left");
     const r = row.querySelector(".key-right");
-    fillSelect(l, leftCols, l.value);
+    if (l.tagName === "SELECT") fillSelect(l, leftCols, l.value);
     fillSelect(r, rightCols, r.value);
   });
   const shared = leftCols.filter((c) => rightCols.includes(c));
@@ -60,11 +74,13 @@ function resetKeyRows(leftCol, rightCol) {
   refreshKeyColumnOptions();
 }
 
-function collectJoinKeys() {
+function collectJoinKeys(container) {
   const keys = [];
-  els.keyRows.querySelectorAll(".key-row").forEach((row) => {
-    const left = row.querySelector(".key-left").value;
+  const host = container || els.keyRows;
+  host.querySelectorAll(".key-row").forEach((row) => {
+    const leftEl = row.querySelector(".key-left");
     const right = row.querySelector(".key-right").value;
+    const left = leftEl.tagName === "SELECT" ? leftEl.value : leftEl.value.trim();
     if (left && right) keys.push({ left, right });
   });
   return keys;
@@ -85,6 +101,67 @@ function renderJoinSuggestions(suggestions) {
     chip.addEventListener("click", () => addKeyRow(s.left, s.right));
     els.joinSuggestions.appendChild(chip);
   });
+}
+
+function addJoinStepPanel() {
+  if (!els.joinSteps) return;
+  extraStepIndex += 1;
+  const stepNum = extraStepIndex + 1;
+  const panel = document.createElement("div");
+  panel.className = "join-step-panel panel stack";
+  panel.style.marginTop = "0.75rem";
+  panel.dataset.step = String(extraStepIndex);
+  panel.innerHTML = `
+    <div class="btn-row" style="justify-content:space-between;">
+      <strong>Step ${stepNum}</strong>
+      <button type="button" class="secondary small remove-step-btn">Remove step</button>
+    </div>
+    <div>
+      <label>Left</label>
+      <p class="hint">previous result</p>
+    </div>
+    <div>
+      <label>Right table</label>
+      <select class="step-right"></select>
+    </div>
+    <div>
+      <label>Join keys</label>
+      <div class="step-key-rows"></div>
+      <button type="button" class="secondary add-step-key-btn">Add key</button>
+    </div>`;
+  const rightSel = panel.querySelector(".step-right");
+  fillSelect(rightSel, state.tables, state.tables[0]);
+  const keyHost = panel.querySelector(".step-key-rows");
+  addKeyRow("", "", keyHost, true);
+  panel.querySelector(".add-step-key-btn").addEventListener("click", () => {
+    addKeyRow("", "", keyHost, true);
+  });
+  rightSel.addEventListener("change", () => {
+    keyHost.querySelectorAll(".key-row").forEach((row) => {
+      const r = row.querySelector(".key-right");
+      fillSelect(r, columnsFor(rightSel.value), r.value);
+    });
+  });
+  panel.querySelector(".remove-step-btn").addEventListener("click", () => panel.remove());
+  els.joinSteps.appendChild(panel);
+}
+
+function collectExtraSteps() {
+  if (!els.joinSteps) return [];
+  const steps = [];
+  els.joinSteps.querySelectorAll(".join-step-panel").forEach((panel) => {
+    const right = panel.querySelector(".step-right")?.value;
+    const on = collectJoinKeys(panel.querySelector(".step-key-rows"));
+    if (right && on.length) {
+      steps.push({
+        left: "__prev__",
+        right,
+        on,
+        how: els.joinHow.value,
+      });
+    }
+  });
+  return steps;
 }
 
 async function onJoinTablesChanged() {
@@ -167,20 +244,40 @@ async function loadRecipes() {
     els.recipeEmpty.style.display = recipes.length ? "none" : "block";
     recipes.forEach((r) => {
       const li = document.createElement("li");
-      const keys = r.spec.on.map((k) => (typeof k === "string" ? k : `${k.left}=${k.right}`)).join(", ");
+      let meta = "";
+      if (r.plan) {
+        const n = r.plan.steps?.length || 0;
+        meta = `${n}-step plan`;
+        if (r.plan.as_table) meta += ` → ${r.plan.as_table}`;
+      } else if (r.spec) {
+        const keys = (r.spec.on || []).map((k) => (typeof k === "string" ? k : `${k.left}=${k.right}`)).join(", ");
+        meta = `${r.spec.left} ⋈ ${r.spec.right} on ${keys} (${r.spec.how})`;
+      }
       li.innerHTML = `
         <div>
           <div><strong>${escapeHtml(r.name)}</strong></div>
-          <div class="recipe-meta">${escapeHtml(r.spec.left)} ⋈ ${escapeHtml(r.spec.right)} on ${escapeHtml(keys)} (${escapeHtml(r.spec.how)})</div>
+          ${meta ? `<div class="recipe-meta">${escapeHtml(meta)}</div>` : ""}
         </div>
         <div class="recipe-actions">
           <button type="button" class="secondary small run-recipe">Run</button>
-          <button type="button" class="danger small delete-recipe">Delete</button>
+          <button type="button" class="danger small" data-act="del">Delete</button>
         </div>`;
       li.querySelector(".run-recipe").addEventListener("click", () => runRecipe(r.name));
-      li.querySelector(".delete-recipe").addEventListener("click", () => deleteRecipe(r.name));
+      li.querySelector('[data-act="del"]').addEventListener("click", () => deleteRecipe(r.name));
       els.recipeList.appendChild(li);
     });
+  } catch (err) {
+    setError(err.message || String(err));
+  }
+}
+
+async function deleteRecipe(name) {
+  const id = requireDataset();
+  if (!id) return;
+  if (!confirm(`Delete recipe “${name}”?`)) return;
+  try {
+    await apiDelete(`/query/join/recipes/${encodeURIComponent(id)}/${encodeURIComponent(name)}`);
+    await loadRecipes();
   } catch (err) {
     setError(err.message || String(err));
   }
@@ -194,19 +291,6 @@ async function runRecipe(name) {
     const data = await apiJson("/query/join", "POST", { dataset_id: id, recipe_name: name });
     renderJoinResult(data);
     if (data.as_table) await loadSchema();
-  } catch (err) {
-    setError(err.message || String(err));
-  }
-}
-
-async function deleteRecipe(name) {
-  const id = requireDataset();
-  if (!id) return;
-  if (!confirm(`Delete recipe "${name}"?`)) return;
-  setError("");
-  try {
-      await apiDelete(`/query/join/recipes/${encodeURIComponent(id)}/${encodeURIComponent(name)}`);
-    await loadRecipes();
   } catch (err) {
     setError(err.message || String(err));
   }
@@ -229,9 +313,10 @@ export function wireJoinTab() {
   els.joinLeft.addEventListener("change", onJoinTablesChanged);
   els.joinRight.addEventListener("change", onJoinTablesChanged);
   els.addKeyBtn.addEventListener("click", () => addKeyRow());
+  els.addJoinStepBtn?.addEventListener("click", () => addJoinStepPanel());
   els.estimateBtn.addEventListener("click", async () => {
     const id = requireDataset();
-    if (!id) return;
+    if (!id || isDatasetLocked()) return;
     const on = collectJoinKeys();
     if (!on.length) { setError("Add at least one join key."); return; }
     setError("");
@@ -242,54 +327,56 @@ export function wireJoinTab() {
     } catch (err) {
       setError(err.message || String(err));
     } finally {
-      els.estimateBtn.disabled = false;
+      els.estimateBtn.disabled = isDatasetLocked();
     }
   });
   els.joinBtn.addEventListener("click", async () => {
     const id = requireDataset();
-    if (!id) return;
+    if (!id || isDatasetLocked()) return;
     if (state.tables.length < 2) { setError("Need at least two tables to join. Upload more spreadsheets."); return; }
     const on = collectJoinKeys();
     if (!on.length) { setError("Add at least one join key."); return; }
 
-    const body = {
-      dataset_id: id,
-      join: { ...buildJoinSpec(), as_table: els.joinAs.value.trim() || null, limit: 500 },
-    };
+    const recipeName = (els.joinRecipeName?.value || "").trim();
+    const asTable = els.joinAs.value.trim() || null;
+    const extraSteps = collectExtraSteps();
+    let body;
+    if (extraSteps.length) {
+      body = {
+        dataset_id: id,
+        plan: {
+          steps: [{ ...buildJoinSpec(), as_table: null, limit: null }, ...extraSteps],
+          as_table: asTable,
+          limit: 500,
+        },
+      };
+    } else {
+      body = {
+        dataset_id: id,
+        join: { ...buildJoinSpec(), as_table: asTable, limit: 500 },
+      };
+    }
+    if (recipeName) body.recipe_name = recipeName;
     setError("");
     els.joinBtn.disabled = true;
     try {
       const data = await apiJson("/query/join", "POST", body);
       renderJoinResult(data);
-      if (body.join.as_table) await loadSchema();
+      if (recipeName) {
+        els.joinStatus.textContent =
+          (els.joinStatus.textContent || "") + ` · saved recipe "${recipeName}"`;
+        await loadRecipes();
+      }
+      if (asTable) await loadSchema();
     } catch (err) {
       setError(err.message || String(err));
     } finally {
-      els.joinBtn.disabled = false;
-    }
-  });
-  els.saveRecipeBtn.addEventListener("click", async () => {
-    const id = requireDataset();
-    if (!id) return;
-    const name = els.joinRecipeName.value.trim();
-    if (!name) { setError("Give the recipe a name first."); return; }
-    const on = collectJoinKeys();
-    if (!on.length) { setError("Add at least one join key."); return; }
-    setError("");
-    try {
-      await apiJson("/query/join/recipes", "POST", {
-        dataset_id: id,
-        name,
-        join: { ...buildJoinSpec(), as_table: els.joinAs.value.trim() || null, limit: 500 },
-      });
-      els.joinStatus.textContent = `Saved recipe "${name}".`;
-      await loadRecipes();
-    } catch (err) {
-      setError(err.message || String(err));
+      els.joinBtn.disabled = isDatasetLocked();
     }
   });
   els.exportJoinCsvBtn.addEventListener("click", () => exportJoinResult("csv"));
   els.exportJoinXlsxBtn.addEventListener("click", () => exportJoinResult("xlsx"));
+  els.exportJoinParquetBtn?.addEventListener("click", () => exportJoinResult("parquet"));
 }
 
 export { onJoinTablesChanged, loadRecipes, wireJoinTab };

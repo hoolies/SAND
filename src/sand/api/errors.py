@@ -50,12 +50,25 @@ def dataset_client(
     *,
     store: DatasetStore | None = None,
     read_only: bool = False,
+    track: bool = False,
+    query_id: str | None = None,
 ) -> Iterator[DuckDBClient]:
-    """Open a dataset and close ephemeral read-only connections on exit."""
+    """Open a dataset and close ephemeral read-only connections on exit.
+
+    When ``track=True``, the connection is registered so ``POST /chat/cancel``
+    (or dataset interrupt) can call DuckDB ``interrupt()``.
+    """
+    from sand.db.active_queries import register, unregister
+
     client = open_dataset(dataset_id, store=store, read_only=read_only)
+    registered: str | None = None
+    if track:
+        registered = register(client, dataset_id, query_id)
     try:
         yield client
     finally:
+        if registered is not None:
+            unregister(registered)
         if client.owns_connection:
             client.close()
 
@@ -77,7 +90,7 @@ def http_error_from_exc(exc: BaseException) -> HTTPException:
             detail=error_detail(
                 "llm_not_configured",
                 str(exc),
-                offline_actions=["profile", "missing", "top_n", "groupby", "time_series"],
+                offline_actions=["profile", "missing", "top_n", "groupby", "time_series", "filter"],
             ),
         )
     if isinstance(exc, httpx.HTTPStatusError):
@@ -94,7 +107,7 @@ def http_error_from_exc(exc: BaseException) -> HTTPException:
             detail=error_detail(
                 "llm_unreachable",
                 f"Could not reach LLM endpoint: {exc}",
-                offline_actions=["profile", "missing", "top_n", "groupby", "time_series"],
+                offline_actions=["profile", "missing", "top_n", "groupby", "time_series", "filter"],
             ),
         )
     if isinstance(exc, (ValueError, TypeError, KeyError)):

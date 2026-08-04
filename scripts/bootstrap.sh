@@ -52,6 +52,23 @@ con.execute("LOAD excel")
 print("==> DuckDB excel extension ready")
 PY
 
+# Ensure local Plotly.js bundle (uses CDN when online; keeps existing file offline)
+python - <<'PY'
+from sand.web.plotly_vendor import ensure_local_bundle, check_and_update, current_status
+try:
+    ensure_local_bundle()
+    check_and_update()
+except Exception as exc:
+    status = current_status()
+    if status.get("bundle_ready"):
+        print(f"==> Plotly.js local bundle ready ({status.get('version')}); update skipped: {exc}")
+    else:
+        raise SystemExit(f"error: Plotly.js bundle missing and could not download: {exc}") from exc
+else:
+    status = current_status()
+    print(f"==> Plotly.js {status.get('version')} ({status.get('message')})")
+PY
+
 cat <<EOF
 
 SAND bootstrap complete.

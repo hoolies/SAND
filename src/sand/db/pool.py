@@ -85,3 +85,17 @@ def close_all() -> None:
             client.close()
         except Exception:
             pass
+
+
+def checkpoint_all() -> int:
+    """Best-effort CHECKPOINT on every pooled write client. Returns count succeeded."""
+    with _lock:
+        clients = list(_clients.values())
+    count = 0
+    for client in clients:
+        try:
+            client.checkpoint()
+            count += 1
+        except Exception:
+            pass
+    return count

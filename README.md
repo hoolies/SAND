@@ -12,13 +12,20 @@ SAND turns spreadsheets into a **DuckDB** database, exposes a localhost API + we
 ./scripts/bootstrap.sh
 source .sand-venv/bin/activate
 
-# Load one or more spreadsheets into the same dataset
+# Load one or more spreadsheets into the same dataset (CSV / XLSX / Parquet)
 sand ingest sales.csv customers.csv --dataset shop
+# Optional: limit XLSX sheets
+# sand ingest book.xlsx --dataset book --sheets Sheet1 --sheets Sheet2
 
 # Join with an explicit key mapping (shared name, or left=right)
 sand join --dataset shop --left sales --right customers --on cust_id=id --how left --as-table sales_enriched
 
-# Start API + chat UI
+# Read-only SQL (no LLM), export, or rename
+sand query --dataset shop --sql "SELECT * FROM sales_enriched LIMIT 20"
+sand export --dataset shop --table sales_enriched --out out.csv
+# sand rename --dataset shop --new-id store
+
+# Start API + chat UI (OpenAPI at /docs)
 sand serve
 # → http://127.0.0.1:8765
 ```
@@ -26,6 +33,8 @@ sand serve
 `scripts/bootstrap.sh` creates `.sand-venv` (the only supported local venv), installs `sand[dev]`, and preloads the DuckDB excel extension. Override with `SAND_PYTHON=/path/to/python` or `SAND_VENV=...` if needed.
 
 ### LLM config (for chat)
+
+Copy `.env.example` to `.env` and set variables, or export directly:
 
 ```bash
 export SAND_LLM_API_KEY=sk-...
@@ -63,9 +72,12 @@ ds.chart(sql="SELECT region, SUM(amount) AS total FROM enriched GROUP BY region"
 
 ## Website workflow (`sand serve`)
 
-1. **Data** — multi-upload, load sample shop, schema browser (profile + samples), review/apply column types, rename/drop tables, export CSV/XLSX/DuckDB, duplicate/delete datasets
-2. **Join** — auto-suggested keys, row-count estimate + many-to-many warnings, save/run join recipes, preview + export
-3. **Chat & charts** — conversation memory per dataset, always evaluates with `LIMIT 10` first, then optional full run; common asks without an LLM
+1. **Data** — multi-upload (CSV/XLSX/Parquet), Excel sheet picker, import `.duckdb`, load sample shop, schema browser (profile + lineage), review/apply column types, rename/drop tables, export CSV/XLSX/Parquet/DuckDB, duplicate/delete datasets
+2. **Join** — auto-suggested keys, multi-step join plans, row-count estimate + many-to-many warnings, saved join recipes (run/delete), preview + export
+3. **SQL** — run DuckDB SQL directly (no LLM), preview/full run, chart + export
+4. **Chat & charts** — conversation memory per dataset, editable/rerunnable SQL, filter + offline asks, always evaluates with `LIMIT 10` first, then optional full run. Charts use a **locally vendored** Plotly.js (refreshed from the CDN when online).
+
+UI state (active dataset + tab) persists in `localStorage` across refreshes.
 
 ## API (selected)
 
@@ -73,18 +85,24 @@ ds.chart(sql="SELECT region, SUM(amount) AS total FROM enriched GROUP BY region"
 |--------|------|---------|
 | GET | `/datasets` | List datasets — returns `{datasets, orphans, empty, hint}` (not a bare array) |
 | DELETE | `/datasets/orphans/{stem}` | Delete a legacy SQLite `*.db` leftover |
-| POST | `/datasets/upload` | Ingest one/many CSV / XLSX / XLS / Parquet files |
+| POST | `/datasets/upload` | Ingest one/many CSV / XLSX / Parquet files (optional `sheets` for XLSX) |
+| POST | `/datasets/xlsx/sheets` | List sheet names in an uploaded XLSX |
+| POST | `/datasets/import` | Import an existing `.duckdb` file |
 | POST | `/datasets/samples/shop` | Load demo dataset |
+| GET | `/datasets/{id}/schema` | Schema + table `lineage` (source file, sheet, row count) |
 | GET | `/datasets/{id}/profile/{table}` | Column profile + samples |
 | GET/POST | `/datasets/{id}/types/{table}` | Infer / apply Pydantic-validated types |
+| POST | `/query/sql` | Run read-only SQL without an LLM (preview/full + chart) |
 | POST | `/query/join/suggest` | Join key suggestions |
 | POST | `/query/join/estimate` | Cardinality + fan-out warning |
-| POST | `/query/join` | Run join (+ optional recipe save) |
+| POST | `/query/join` | Run join or multi-step `plan` (+ optional recipe save) |
 | GET/POST/DELETE | `/query/join/recipes...` | Persist join recipes |
 | POST | `/chat` | NL→SQL (preview `LIMIT 10` first); 503 if no LLM |
-| POST | `/chat/common-ask` | Offline asks (no LLM): profile / missing / top_n / groupby / time_series |
+| POST | `/chat/cancel` | Interrupt in-flight DuckDB query (best-effort) |
+| POST | `/chat/common-ask` | Offline asks (no LLM): profile / missing / top_n / groupby / time_series / filter |
+| GET/POST/DELETE | `/chat/views...` | Saved SQL views (optional cache + over-cap charts) |
 | GET/DELETE | `/chat/{id}/history` | Chat memory |
-| POST | `/export/{csv\|xlsx\|db}` | Export table/SQL result or whole `.duckdb` file |
+| POST | `/export/{csv\|xlsx\|parquet\|db}` | Export table/SQL result or whole `.duckdb` file |
 
 Datasets are stored under `.sand/data/<id>.duckdb`. Chat history is a sidecar `.sand/data/<id>.chat.jsonl` so asks can open DuckDB read-only. Dataset ids are sanitized to `[A-Za-z0-9_-]` (max 64); path separators / `..` are rejected. Uploads are size-capped (`SAND_MAX_INGEST_BYTES`, default 200 MB) while streaming to disk. Join materialize / export / full chat results are row-capped (`SAND_MAX_*_ROWS`). Offline asks (`top_n` / `groupby` / `filter`) are capped by `SAND_MAX_OFFLINE_ASK_ROWS` (default 10 000).
 
@@ -131,7 +149,7 @@ tests/
 
 ## Versioning
 
-Current release: **0.8.2**
+Current release: **0.9.1** — see [CHANGELOG.md](CHANGELOG.md)
 
 - Patch `0.0.1` — small fixes, hardening, refactors that do not change API/behavior contracts
 - Minor `0.1.0` — new features, or changes that break callers/API/CLI
@@ -149,4 +167,4 @@ Current release: **0.8.2**
 1. Transfer spreadsheet → DuckDB (analytics-first)
 2. Jupyter support
 3. LLM natural-language queries (preview-first)
-4. Chart-first answers + export to CSV / XLSX / DuckDB
+4. Chart-first answers + export to CSV / XLSX / Parquet / DuckDB

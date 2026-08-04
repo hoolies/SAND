@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sand"
-version = "0.8.2"
+version = "0.9.1"
 description = "Spreadsheets Are Not Databases — turn spreadsheets into a queryable DB with chat and charts"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,7 +37,13 @@ sand = "sand.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-sand = ["web/*", "web/js/*", "samples/*"]
+sand = [
+  "web/*",
+  "web/js/*",
+  "web/vendor/plotly/*",
+  "samples/*",
+]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

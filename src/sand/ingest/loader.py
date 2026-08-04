@@ -86,6 +86,7 @@ def ingest_file(
     client: DuckDBClient | None = None,
     table_name: str | None = None,
     if_exists: str = "replace",
+    xlsx_sheets: list[str] | None = None,
 ) -> IngestResult:
     """Ingest a spreadsheet file into a DuckDB database."""
     return ingest_files(
@@ -95,6 +96,7 @@ def ingest_file(
         client=client,
         table_names=[table_name] if table_name else None,
         if_exists=if_exists,
+        xlsx_sheets=xlsx_sheets,
     )
 
 
@@ -106,11 +108,15 @@ def ingest_files(
     client: DuckDBClient | None = None,
     table_names: list[str | None] | None = None,
     if_exists: str = "replace",
+    xlsx_sheets: list[str] | None = None,
 ) -> IngestResult:
     """Ingest multiple spreadsheet files into one dataset.
 
     CSV / Parquet / XLSX use DuckDB-native readers. Legacy ``.xls`` is not supported —
     convert to ``.xlsx`` / CSV / Parquet first.
+
+    ``xlsx_sheets`` optionally limits which Excel sheet names are ingested (applied to
+    every ``.xlsx`` in ``paths``).
     """
     if not paths:
         raise ValueError("At least one spreadsheet path is required")
@@ -208,6 +214,14 @@ def ingest_files(
             sheet_names = list_xlsx_sheets(path)
             if not sheet_names:
                 raise ValueError(f"No sheets found in {path.name}")
+            if xlsx_sheets:
+                wanted = {s.strip() for s in xlsx_sheets if s and str(s).strip()}
+                sheet_names = [s for s in sheet_names if s in wanted]
+                if not sheet_names:
+                    raise ValueError(
+                        f"None of the requested sheets {sorted(wanted)} exist in {path.name}. "
+                        f"Available: {list_xlsx_sheets(path)}"
+                    )
             for sheet_name in sheet_names:
                 if override and len(sheet_names) == 1:
                     base = sanitize_table_name(override)

@@ -89,5 +89,3 @@ watchfiles==1.2.0
     # via uvicorn
 websockets==17.0.1
     # via uvicorn
-xlrd==2.0.2
-    # via sand (pyproject.toml)

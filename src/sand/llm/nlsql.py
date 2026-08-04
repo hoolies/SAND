@@ -79,6 +79,8 @@ class ChatResult:
     evaluated_limit: int = EVAL_LIMIT
     is_preview: bool = True
     full_row_count: int | None = None
+    chart_sample_rows: int | None = None
+    chart_capped: bool = False
 
 
 def _unquote(ident: str) -> str:
@@ -199,6 +201,7 @@ class NLSQLChat:
         run_full: bool = False,
         sql_override: str | None = None,
         persist: bool = True,
+        bypass_chart_cap: bool = False,
     ) -> ChatResult:
         schema = self.client.schema()
         allowed = set(self.client.table_names())
@@ -264,7 +267,9 @@ class NLSQLChat:
 
         limits = limits_from_settings()
         sql_preview = with_eval_limit(sql, EVAL_LIMIT)
-        chart_cap = max(EVAL_LIMIT, int(limits.chart_sample_rows))
+        default_cap = max(EVAL_LIMIT, int(limits.chart_sample_rows))
+        # Saved views may opt into loading up to max_result_rows for charts
+        chart_cap = int(limits.max_result_rows) if bypass_chart_cap else default_cap
         full_row_count: int | None = None
 
         if run_full:
@@ -273,7 +278,6 @@ class NLSQLChat:
                 full_row_count = estimate_sql_rows(self.client, sql, probe_limit=limits.max_result_rows)
             except Exception:
                 full_row_count = find_limit_value(sql)
-            # Charts always load a capped sample — never the full result set into pandas
             run_sql = with_eval_limit(sql, min(chart_cap, limits.max_result_rows))
         else:
             run_sql = sql_preview
@@ -315,16 +319,21 @@ class NLSQLChat:
             spec = plan_chart(df, preferred=preferred, title=summary[:80])
 
         bundle = render_bundle(df, spec)
+        shown = bundle["row_count"]
+        full_n = full_row_count if full_row_count is not None else shown
+        chart_capped = bool(run_full and full_n is not None and shown < int(full_n))
         result = ChatResult(
             summary=summary,
             sql=sql,
             sql_preview=sql_preview,
             chart=bundle,
             preview=bundle["preview"],
-            row_count=bundle["row_count"],
-            evaluated_limit=EVAL_LIMIT if not run_full else min(chart_cap, bundle["row_count"]),
+            row_count=shown,
+            evaluated_limit=EVAL_LIMIT if not run_full else min(chart_cap, shown),
             is_preview=not run_full,
-            full_row_count=full_row_count if full_row_count is not None else bundle["row_count"],
+            full_row_count=full_n,
+            chart_sample_rows=chart_cap if run_full else None,
+            chart_capped=chart_capped,
         )
 
         if persist and not sql_override:

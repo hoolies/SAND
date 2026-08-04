@@ -23,7 +23,7 @@ class ExportRequest(BaseModel):
     dataset_id: str
     sql: str | None = None
     table: str | None = None
-    format: Literal["csv", "xlsx", "db"] = "csv"
+    format: Literal["csv", "xlsx", "db", "parquet"] = "csv"
 
 
 def _iter_and_cleanup(path: Path, chunk_size: int = 1024 * 64):
@@ -39,7 +39,7 @@ def _iter_and_cleanup(path: Path, chunk_size: int = 1024 * 64):
 
 
 @router.post("/{fmt}")
-def export_result(fmt: Literal["csv", "xlsx", "db"], body: ExportRequest) -> StreamingResponse:
+def export_result(fmt: Literal["csv", "xlsx", "db", "parquet"], body: ExportRequest) -> StreamingResponse:
     body.format = fmt
     store = DatasetStore()
 
@@ -67,7 +67,7 @@ def export_result(fmt: Literal["csv", "xlsx", "db"], body: ExportRequest) -> Str
                     raise ValueError(f"Unknown table: {body.table}")
                 sql = f'SELECT * FROM "{body.table}"'
             else:
-                raise ValueError("Provide sql or table for csv/xlsx export")
+                raise ValueError("Provide sql or table for csv/xlsx/parquet export")
             guard_result_rows(client, sql, max_rows=limits.max_export_rows, action="export")
 
             if body.format == "csv":
@@ -79,6 +79,17 @@ def export_result(fmt: Literal["csv", "xlsx", "db"], body: ExportRequest) -> Str
                     _iter_and_cleanup(tmp_out),
                     media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{body.dataset_id}.csv"'},
+                )
+
+            if body.format == "parquet":
+                tmp = tempfile.NamedTemporaryFile(prefix="sand_export_", suffix=".parquet", delete=False)
+                tmp_out = Path(tmp.name)
+                tmp.close()
+                client.copy_to_parquet(sql, tmp_out)
+                return StreamingResponse(
+                    _iter_and_cleanup(tmp_out),
+                    media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{body.dataset_id}.parquet"'},
                 )
 
             tmp = tempfile.NamedTemporaryFile(prefix="sand_export_", suffix=".xlsx", delete=False)

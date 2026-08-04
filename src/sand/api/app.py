@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from sand import __version__
 from sand.api.errors import error_detail
 from sand.api.routes.charts import router as charts_router
 from sand.api.routes.chat import router as chat_router
@@ -22,8 +23,10 @@ from sand.api.routes.export import router as export_router
 from sand.api.routes.join import router as join_router
 from sand.api.routes.query import router as query_router
 from sand.core.config import get_settings
-from sand.db.pool import close_all
+from sand.db.pool import checkpoint_all, close_all
 from sand.llm.openai_compat import OpenAICompatClient
+from sand.web.plotly_vendor import current_status as plotly_status
+from sand.web.plotly_vendor import start_background_update_check
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 logger = logging.getLogger("sand.api")
@@ -35,7 +38,15 @@ async def lifespan(_app: FastAPI):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # Prefer local Plotly; refresh in the background when online
+    start_background_update_check()
     yield
+    try:
+        n = checkpoint_all()
+        if n:
+            logger.info("checkpointed %s pooled dataset(s) on shutdown", n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("shutdown checkpoint failed: %s", exc)
     close_all()
 
 
@@ -48,7 +59,7 @@ app = FastAPI(
         "413 limit_exceeded, 423 locked, 502 llm_upstream, 503 llm_not_configured|llm_unreachable, "
         "504 timeout, 410 deprecated."
     ),
-    version="0.8.2",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -135,10 +146,16 @@ def health() -> dict:
     settings = get_settings()
     llm = OpenAICompatClient(settings)
     reachable = _probe_llm(settings)
+    from sand.core.limits import limits_from_settings
+
+    limits = limits_from_settings(settings)
     return {
         "status": "ok",
+        "version": __version__,
         "llm_configured": llm.is_configured,
         "llm_reachable": reachable,
         "llm_model": settings.llm_model if llm.is_configured else None,
         "auth_required": bool(settings.api_token),
+        "plotly": plotly_status(),
+        "limits": limits.model_dump(),
     }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from sand.api.errors import dataset_client, error_detail, http_error_from_exc, open_dataset, tabular_result
 from sand.core.dataset_meta import delete_recipe, get_recipe, list_recipes, save_recipe
@@ -35,7 +35,16 @@ class EstimateRequest(BaseModel):
 class RecipeSaveRequest(BaseModel):
     dataset_id: str
     name: str
-    join: JoinSpec
+    join: JoinSpec | None = None
+    plan: JoinPlan | None = None
+
+    @model_validator(mode="after")
+    def _one_of(self) -> RecipeSaveRequest:
+        if self.join is None and self.plan is None:
+            raise ValueError("Provide join or plan")
+        if self.join is not None and self.plan is not None:
+            raise ValueError("Provide only one of join or plan")
+        return self
 
 
 @router.post("/join")
@@ -48,7 +57,10 @@ def run_join(body: JoinRequest) -> dict:
             recipe = get_recipe(client, body.recipe_name)
             if recipe is None:
                 raise ValueError(f"Unknown recipe: {body.recipe_name}")
-            body.join = recipe.spec
+            if recipe.plan is not None:
+                body.plan = recipe.plan
+            else:
+                body.join = recipe.spec
 
         if body.join is None and body.plan is None:
             raise ValueError("Provide join, plan, or recipe_name")
@@ -58,6 +70,8 @@ def run_join(body: JoinRequest) -> dict:
             spec_dump = body.plan.model_dump()
             as_table = body.plan.as_table
             estimate = None
+            if body.recipe_name:
+                save_recipe(client, body.recipe_name, plan=body.plan)
         else:
             assert body.join is not None
             estimate = estimate_join(client, body.join)
@@ -65,7 +79,7 @@ def run_join(body: JoinRequest) -> dict:
             spec_dump = body.join.model_dump()
             as_table = body.join.as_table
             if body.recipe_name:
-                save_recipe(client, body.recipe_name, body.join)
+                save_recipe(client, body.recipe_name, spec=body.join)
 
         payload = tabular_result(
             dataset_id=body.dataset_id,
@@ -123,7 +137,7 @@ def recipes_list(dataset_id: str) -> dict:
 def recipes_save(body: RecipeSaveRequest) -> dict:
     try:
         client = open_dataset(body.dataset_id)
-        recipe = save_recipe(client, body.name, body.join)
+        recipe = save_recipe(client, body.name, spec=body.join, plan=body.plan)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

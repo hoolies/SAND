@@ -83,6 +83,10 @@ class DuckDBClient:
         except Exception:
             pass
 
+    def interrupt(self) -> None:
+        """Cancel the currently running statement on this connection (best-effort)."""
+        self._interrupt()
+
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> None:
         with self._lock:
             def _do() -> None:
@@ -122,6 +126,12 @@ class DuckDBClient:
         path_lit = str(Path(dest).resolve()).replace("'", "''")
         cleaned = sql.strip().rstrip(";")
         self.execute(f"COPY ({cleaned}) TO '{path_lit}' (HEADER, DELIMITER ',', FORMAT CSV)")
+
+    def copy_to_parquet(self, sql: str, dest: Path) -> None:
+        """Stream a SELECT to Parquet via DuckDB COPY."""
+        path_lit = str(Path(dest).resolve()).replace("'", "''")
+        cleaned = sql.strip().rstrip(";")
+        self.execute(f"COPY ({cleaned}) TO '{path_lit}' (FORMAT PARQUET)")
 
     def copy_to_xlsx(self, sql: str, dest: Path) -> None:
         """Export a SELECT to XLSX via CSV staging + openpyxl write-only (bounded memory)."""

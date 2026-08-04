@@ -1,13 +1,71 @@
 import {
-  apiGet, apiJson, apiForm, apiDelete, downloadExport, readJsonSafe, detailMessage,
+  apiGet, apiJson, apiForm, apiFormWithProgress, apiDelete, downloadExport, readJsonSafe, detailMessage,
 } from "./api.js";
 import {
-  SAND_TYPES, state, els, setError, fillSelect, columnsFor, renderPreviewTable,
-  escapeHtml, requireDataset, syncActiveDatasetBadges,
+  SAND_TYPES, state, els, setError, setErrorFrom, fillSelect, columnsFor, renderPreviewTable,
+  escapeHtml, requireDataset, syncActiveDatasetBadges, updateLockedUi, isDatasetLocked,
 } from "./state.js";
 
 export let afterSchemaLoad = null;
 export function setAfterSchemaLoad(fn) { afterSchemaLoad = fn; }
+
+const PEEK_PAGE = 50;
+let peekOffset = 0;
+
+async function checkpointBeforeDestructive() {
+  const id = els.dataset.value;
+  if (!id) return;
+  try {
+    await apiJson(`/datasets/${encodeURIComponent(id)}/checkpoint`, "POST", {});
+  } catch (err) {
+    if (!isDatasetLocked()) throw err;
+  }
+}
+
+async function confirmDestructive(action, target) {
+  const msg = `This will checkpoint then permanently ${action} "${target}". Continue?`;
+  if (!confirm(msg)) return false;
+  try {
+    await checkpointBeforeDestructive();
+  } catch (err) {
+    setErrorFrom(err);
+    return false;
+  }
+  return true;
+}
+
+function assignFilesToInput(files) {
+  if (!els.file || !files?.length) return;
+  const dt = new DataTransfer();
+  Array.from(files).forEach((f) => dt.items.add(f));
+  els.file.files = dt.files;
+  els.file.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function wireUploadDropzone() {
+  const zone = els.uploadDropzone;
+  if (!zone) return;
+  zone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    zone.classList.add("dragover");
+  });
+  zone.addEventListener("dragleave", (e) => {
+    if (!zone.contains(e.relatedTarget)) zone.classList.remove("dragover");
+  });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("dragover");
+    const files = Array.from(e.dataTransfer?.files || []).filter((f) => {
+      const name = f.name.toLowerCase();
+      return name.endsWith(".csv") || name.endsWith(".xlsx") || name.endsWith(".parquet");
+    });
+    if (!files.length) {
+      setError("Drop CSV, XLSX, or Parquet files only.");
+      return;
+    }
+    assignFilesToInput(files);
+  });
+}
 
 
 async function refreshDatasets(selectId) {
@@ -93,6 +151,7 @@ async function refreshDatasets(selectId) {
     fillSelect(els.chatTable, []);
   }
   syncActiveDatasetBadges();
+  updateLockedUi();
 }
 
 async function loadSchema() {
@@ -101,9 +160,11 @@ async function loadSchema() {
   const data = await apiGet(`/datasets/${encodeURIComponent(id)}/schema`);
   state.schema = data.schema || {};
   state.tables = data.tables || [];
+  state.lineage = data.lineage || {};
   els.datasetId.value = id;
 
   renderTableList();
+  updateLockedUi();
   if (state.currentTable && !state.tables.includes(state.currentTable)) {
     clearTableContext();
   }
@@ -130,9 +191,17 @@ function renderTableList() {
   }
   state.tables.forEach((t) => {
     const cols = columnsFor(t);
+    const lin = state.lineage[t] || {};
+    const metaParts = [];
+    if (lin.source_file) metaParts.push(escapeHtml(lin.source_file));
+    if (lin.sheet_name) metaParts.push(`sheet: ${escapeHtml(lin.sheet_name)}`);
+    if (lin.row_count != null) metaParts.push(`${lin.row_count} rows`);
+    const meta = metaParts.length ? `<div class="recipe-meta">${metaParts.join(" · ")}</div>` : "";
     const li = document.createElement("li");
     li.className = t === state.currentTable ? "active" : "";
-    li.innerHTML = `<span>${escapeHtml(t)}</span><span class="cols-hint">${cols.length} cols</span>`;
+    li.innerHTML =
+      `<span>${escapeHtml(t)}</span>` +
+      `<span class="cols-hint">${cols.length} cols</span>${meta}`;
     li.addEventListener("click", () => selectTable(t));
     els.tableList.appendChild(li);
   });
@@ -141,10 +210,56 @@ function renderTableList() {
 function clearTableContext() {
   state.currentTable = null;
   state.typesPlan = null;
+  peekOffset = 0;
   els.tableContextEmpty.style.display = "block";
   els.tableContext.style.display = "none";
   els.typesEditor.style.display = "none";
+  if (els.tableRowsPeek) els.tableRowsPeek.style.display = "none";
+  if (els.tableRowsPeekBody) els.tableRowsPeekBody.innerHTML = "";
+  if (els.tableRowsPeekMeta) els.tableRowsPeekMeta.textContent = "";
   renderTableList();
+}
+
+async function loadTableRowsPeek(table, offset = 0) {
+  if (!els.tableRowsPeek || !els.tableRowsPeekBody) return;
+  const id = els.dataset.value;
+  if (!id || !table) return;
+  peekOffset = offset;
+  els.tableRowsPeek.style.display = "block";
+  els.tableRowsPeekBody.innerHTML = "<p class='hint'>Loading sample rows…</p>";
+  if (els.tableRowsPeekMeta) els.tableRowsPeekMeta.textContent = "";
+  try {
+    const data = await apiGet(
+      `/datasets/${encodeURIComponent(id)}/rows/${encodeURIComponent(table)}?limit=${PEEK_PAGE}&offset=${offset}`,
+    );
+    const rows = data.rows || [];
+    const columns = data.columns || (rows[0] ? Object.keys(rows[0]) : []);
+    els.tableRowsPeekBody.innerHTML = renderPreviewTable(rows, columns);
+    const total = data.total_count;
+    const start = offset + 1;
+    const end = offset + rows.length;
+    if (els.tableRowsPeekMeta) {
+      els.tableRowsPeekMeta.textContent = rows.length
+        ? (total != null
+          ? `Rows ${start}–${end} of ${total}`
+          : `Rows ${start}–${end}`)
+        : "No rows in this table.";
+    }
+    if (els.peekPrevBtn) els.peekPrevBtn.disabled = offset <= 0;
+    if (els.peekNextBtn) {
+      els.peekNextBtn.disabled = rows.length < PEEK_PAGE || (total != null && end >= total);
+    }
+  } catch (err) {
+    if (err.status === 404) {
+      els.tableRowsPeekBody.innerHTML = "<p class='hint'>Sample rows not available yet.</p>";
+      if (els.peekPrevBtn) els.peekPrevBtn.disabled = true;
+      if (els.peekNextBtn) els.peekNextBtn.disabled = true;
+      return;
+    }
+    els.tableRowsPeekBody.innerHTML = "";
+    els.tableRowsPeek.style.display = "none";
+    throw err;
+  }
 }
 
 async function selectTable(table) {
@@ -159,8 +274,9 @@ async function selectTable(table) {
   els.profileView.innerHTML = "<p class='hint'>Loading profile…</p>";
   try {
     await loadProfile(table);
+    await loadTableRowsPeek(table, 0);
   } catch (err) {
-    setError(err.message || String(err));
+    setErrorFrom(err);
     els.profileView.innerHTML = "";
   }
 }
@@ -240,6 +356,61 @@ function renderTypesEditor(plan) {
 
 
 
+async function loadXlsxSheets() {
+  if (!els.sheetPicker || !els.file?.files?.length) {
+    if (els.sheetPicker) {
+      els.sheetPicker.style.display = "none";
+      els.sheetPicker.innerHTML = "<label>Excel sheets (optional — leave unchecked to ingest all)</label>";
+    }
+    state.selectedSheets = [];
+    return;
+  }
+  const xlsxFiles = Array.from(els.file.files).filter((f) => f.name.toLowerCase().endsWith(".xlsx"));
+  if (!xlsxFiles.length) {
+    els.sheetPicker.style.display = "none";
+    els.sheetPicker.innerHTML = "<label>Excel sheets (optional — leave unchecked to ingest all)</label>";
+    state.selectedSheets = [];
+    return;
+  }
+  els.sheetPicker.style.display = "block";
+  els.sheetPicker.innerHTML = "<label>Excel sheets (optional — leave unchecked to ingest all)</label>";
+  state.selectedSheets = [];
+  for (const f of xlsxFiles) {
+    const form = new FormData();
+    form.append("file", f);
+    try {
+      const data = await apiForm("/datasets/xlsx/sheets", form);
+      const group = document.createElement("div");
+      group.className = "stack";
+      group.innerHTML = `<strong class="hint">${escapeHtml(f.name)}</strong>`;
+      (data.sheets || []).forEach((sheet) => {
+        const id = `sheet-${escapeHtml(f.name)}-${escapeHtml(sheet)}`.replace(/[^a-zA-Z0-9_-]/g, "_");
+        const label = document.createElement("label");
+        label.className = "checkbox-row";
+        label.innerHTML = `<input type="checkbox" data-sheet="${escapeHtml(sheet)}" id="${id}" /> ${escapeHtml(sheet)}`;
+        group.appendChild(label);
+      });
+      els.sheetPicker.appendChild(group);
+    } catch (err) {
+      const errEl = document.createElement("p");
+      errEl.className = "hint";
+      errEl.textContent = `${f.name}: ${err.message || String(err)}`;
+      els.sheetPicker.appendChild(errEl);
+    }
+  }
+}
+
+function collectSelectedSheets() {
+  if (!els.sheetPicker) return [];
+  const checked = els.sheetPicker.querySelectorAll('input[type="checkbox"][data-sheet]:checked');
+  return Array.from(checked).map((cb) => cb.dataset.sheet);
+}
+
+function appendSheetsToForm(form) {
+  const sheets = collectSelectedSheets();
+  if (sheets.length) form.append("sheets", JSON.stringify(sheets));
+}
+
 async function uploadFiles({ append }) {
   setError("");
   els.uploadStatus.textContent = "";
@@ -259,17 +430,28 @@ async function uploadFiles({ append }) {
       els.uploadStatus.textContent = "Adding…";
       let lastDatasetId = ds;
       let addedCount = 0;
-      for (const f of Array.from(els.file.files)) {
+      const files = Array.from(els.file.files);
+      for (let i = 0; i < files.length; i += 1) {
+        const f = files[i];
         const form = new FormData();
         form.append("file", f);
         form.append("replace", replace ? "true" : "false");
-        const data = await apiForm(`/datasets/${encodeURIComponent(ds)}/tables`, form);
+        appendSheetsToForm(form);
+        const data = await apiFormWithProgress(
+          `/datasets/${encodeURIComponent(ds)}/tables`,
+          form,
+          (pct) => { els.uploadStatus.textContent = `Adding… ${pct}%`; },
+        );
         lastDatasetId = data.dataset_id;
         addedCount += data.tables.length;
       }
       els.uploadStatus.textContent = `Added ${addedCount} table(s) to ${lastDatasetId}`;
       els.file.value = "";
       els.fileList.innerHTML = "";
+      if (els.sheetPicker) {
+        els.sheetPicker.style.display = "none";
+        els.sheetPicker.innerHTML = "<label>Excel sheets (optional — leave unchecked to ingest all)</label>";
+      }
       await refreshDatasets(lastDatasetId);
       return;
     }
@@ -278,12 +460,19 @@ async function uploadFiles({ append }) {
     if (ds) form.append("dataset_id", ds);
     form.append("replace", replace ? "true" : "false");
     Array.from(els.file.files).forEach((f) => form.append("files", f));
-    els.uploadStatus.textContent = "Uploading…";
-    const data = await apiForm("/datasets/upload", form);
+    appendSheetsToForm(form);
+    els.uploadStatus.textContent = "Uploading… 0%";
+    const data = await apiFormWithProgress("/datasets/upload", form, (pct) => {
+      els.uploadStatus.textContent = `Uploading… ${pct}%`;
+    });
     els.uploadStatus.textContent = `Loaded ${data.tables.length} table(s) into ${data.dataset_id}: ${data.tables.map((t) => t.name).join(", ")}`;
     els.datasetId.value = data.dataset_id;
     els.file.value = "";
     els.fileList.innerHTML = "";
+    if (els.sheetPicker) {
+      els.sheetPicker.style.display = "none";
+      els.sheetPicker.innerHTML = "<label>Excel sheets (optional — leave unchecked to ingest all)</label>";
+    }
     await refreshDatasets(data.dataset_id);
   } catch (err) {
     setError(err.message || String(err));
@@ -314,20 +503,22 @@ export function wireDataTab() {
   });
   els.dropTableBtn.addEventListener("click", async () => {
     if (!state.currentTable) return;
-    if (!confirm(`Drop table "${state.currentTable}"? This cannot be undone.`)) return;
+    const table = state.currentTable;
+    if (!(await confirmDestructive("delete table", table))) return;
     setError("");
     try {
       await apiDelete(
-        `/datasets/${encodeURIComponent(els.dataset.value)}/tables/${encodeURIComponent(state.currentTable)}`
+        `/datasets/${encodeURIComponent(els.dataset.value)}/tables/${encodeURIComponent(table)}`,
       );
       clearTableContext();
       await loadSchema();
     } catch (err) {
-      setError(err.message || String(err));
+      setErrorFrom(err);
     }
   });
   els.exportTableCsvBtn.addEventListener("click", () => exportTable("csv"));
   els.exportTableXlsxBtn.addEventListener("click", () => exportTable("xlsx"));
+  els.exportTableParquetBtn?.addEventListener("click", () => exportTable("parquet"));
   els.exportDbBtn.addEventListener("click", async () => {
     const id = requireDataset();
     if (!id) return;
@@ -351,17 +542,34 @@ export function wireDataTab() {
       setError(err.message || String(err));
     }
   });
+  els.renameDatasetBtn?.addEventListener("click", async () => {
+    const id = requireDataset();
+    if (!id) return;
+    const newId = prompt(`Rename dataset "${id}" to:`, id);
+    if (!newId || newId.trim() === id) return;
+    setError("");
+    try {
+      const data = await apiJson(
+        `/datasets/${encodeURIComponent(id)}/rename`,
+        "POST",
+        { new_id: newId.trim() },
+      );
+      await refreshDatasets(data.new_id || data.dataset_id || newId.trim());
+    } catch (err) {
+      setErrorFrom(err);
+    }
+  });
   els.deleteDatasetBtn.addEventListener("click", async () => {
     const id = requireDataset();
     if (!id) return;
-    if (!confirm(`Delete dataset "${id}" and all its tables? This cannot be undone.`)) return;
+    if (!(await confirmDestructive("delete dataset", id))) return;
     setError("");
     try {
       await apiDelete(`/datasets/${encodeURIComponent(id)}`);
       clearTableContext();
       await refreshDatasets();
     } catch (err) {
-      setError(err.message || String(err));
+      setErrorFrom(err);
     }
   });
   els.reviewTypesBtn.addEventListener("click", async () => {
@@ -408,10 +616,45 @@ export function wireDataTab() {
       els.applyTypesBtn.disabled = false;
     }
   });
+  els.peekPrevBtn?.addEventListener("click", () => {
+    if (!state.currentTable || peekOffset <= 0) return;
+    loadTableRowsPeek(state.currentTable, Math.max(0, peekOffset - PEEK_PAGE)).catch(setErrorFrom);
+  });
+  els.peekNextBtn?.addEventListener("click", () => {
+    if (!state.currentTable) return;
+    loadTableRowsPeek(state.currentTable, peekOffset + PEEK_PAGE).catch(setErrorFrom);
+  });
+  wireUploadDropzone();
   els.file.addEventListener("change", () => {
     els.fileList.innerHTML = Array.from(els.file.files)
       .map((f) => `<li>${escapeHtml(f.name)} <span class="hint">(${Math.round(f.size / 1024)} KB)</span></li>`)
       .join("");
+    loadXlsxSheets().catch((err) => setError(err.message || String(err)));
+  });
+  els.lockedRetryBtn?.addEventListener("click", () => refreshDatasets(els.dataset.value));
+  els.importDuckdbBtn?.addEventListener("click", async () => {
+    setError("");
+    if (!els.importDuckdbFile?.files?.length) {
+      setError("Choose a .duckdb file to import.");
+      return;
+    }
+    const form = new FormData();
+    form.append("file", els.importDuckdbFile.files[0]);
+    const dsId = (els.importDatasetId?.value || "").trim();
+    if (dsId) form.append("dataset_id", dsId);
+    els.uploadStatus.textContent = "Importing…";
+    try {
+      const data = await apiFormWithProgress("/datasets/import", form, (pct) => {
+        els.uploadStatus.textContent = `Importing… ${pct}%`;
+      });
+      els.uploadStatus.textContent = `Imported ${data.tables.length} table(s) as ${data.dataset_id}`;
+      els.importDuckdbFile.value = "";
+      if (els.importDatasetId) els.importDatasetId.value = "";
+      await refreshDatasets(data.dataset_id);
+    } catch (err) {
+      setError(err.message || String(err));
+      els.uploadStatus.textContent = "";
+    }
   });
   els.uploadBtn.addEventListener("click", () => uploadFiles({ append: false }));
   els.addBtn.addEventListener("click", () => uploadFiles({ append: true }));

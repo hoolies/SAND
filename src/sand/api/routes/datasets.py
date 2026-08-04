@@ -117,17 +117,115 @@ def sanitize_filename_stem(stem: str) -> str:
     return cleaned or "sheet"
 
 
+def _parse_sheets_form(sheets: str | None) -> list[str] | None:
+    if not sheets or not str(sheets).strip():
+        return None
+    raw = str(sheets).strip()
+    if raw.startswith("["):
+        import json
+
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError("sheets must be a JSON list of sheet names")
+        return [str(s) for s in data]
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+@router.post("/xlsx/sheets")
+async def xlsx_sheet_names(file: UploadFile = File(...)) -> dict:
+    """List sheet names in an uploaded XLSX without ingesting."""
+    from sand.core.limits import limits_from_settings
+    from sand.ingest.readers import list_xlsx_sheets
+
+    limits = limits_from_settings()
+    saved: Path | None = None
+    try:
+        if not file.filename or Path(file.filename).suffix.lower() != ".xlsx":
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail("bad_request", "Provide an .xlsx file"),
+            )
+        saved = await _save_upload(file, max_bytes=limits.max_ingest_bytes)
+        sheets = list_xlsx_sheets(saved)
+        return {"filename": file.filename, "sheets": sheets}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise http_error_from_exc(exc) from exc
+    finally:
+        if saved is not None:
+            saved.unlink(missing_ok=True)
+            try:
+                saved.parent.rmdir()
+            except OSError:
+                pass
+
+
+@router.post("/import")
+async def import_duckdb_file(
+    file: UploadFile = File(...),
+    dataset_id: str | None = Form(default=None),
+) -> dict:
+    """Import an existing ``.duckdb`` file into the local data dir."""
+    from sand.core.limits import limits_from_settings
+
+    if not file.filename or Path(file.filename).suffix.lower() != ".duckdb":
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("bad_request", "Provide a .duckdb file"),
+        )
+    ds_id = _safe_dataset_id(dataset_id or Path(file.filename).stem)
+    limits = limits_from_settings()
+    stem = sanitize_filename_stem(Path(file.filename).stem)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="sand_import_"))
+    saved = tmp_dir / f"{stem}.duckdb"
+    written = 0
+    try:
+        with saved.open("wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limits.max_ingest_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=error_detail(
+                            "limit_exceeded",
+                            f"Import exceeds SAND_MAX_INGEST_BYTES={limits.max_ingest_bytes:,}",
+                        ),
+                    )
+                fh.write(chunk)
+        store = DatasetStore()
+        path = store.import_duckdb(saved, ds_id)
+        with dataset_client(ds_id, store=store, read_only=True) as client:
+            tables = client.table_names()
+        return {"dataset_id": ds_id, "db_path": str(path), "tables": tables}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise http_error_from_exc(exc) from exc
+    finally:
+        saved.unlink(missing_ok=True)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
 @router.post("/upload")
 async def upload_dataset(
     file: UploadFile | None = File(default=None),
     files: list[UploadFile] | None = File(default=None),
     dataset_id: str | None = Form(default=None),
     replace: bool = Form(default=True),
+    sheets: str | None = Form(default=None),
 ) -> dict:
     """Upload one or more spreadsheets into a dataset.
 
     Use ``file`` for a single upload, or ``files`` for multiple. When ``dataset_id``
     already exists, new tables are added (``replace`` controls name collisions).
+    Optional ``sheets`` (JSON list or comma-separated) limits XLSX sheets ingested.
     """
     from sand.core.limits import limits_from_settings
 
@@ -145,6 +243,7 @@ async def upload_dataset(
     saved: list[Path] = []
 
     try:
+        sheet_filter = _parse_sheets_form(sheets)
         for upload in uploads:
             max_bytes = limits.max_ingest_bytes
             saved.append(await _save_upload(upload, max_bytes=max_bytes))
@@ -153,6 +252,7 @@ async def upload_dataset(
             dataset_id=ds_id,
             db_path=settings.db_path(ds_id),
             if_exists="replace" if replace else "fail",
+            xlsx_sheets=sheet_filter,
         )
     except HTTPException:
         raise
@@ -175,6 +275,7 @@ async def add_table(
     file: UploadFile = File(...),
     table_name: str | None = Form(default=None),
     replace: bool = Form(default=False),
+    sheets: str | None = Form(default=None),
 ) -> dict:
     """Add another spreadsheet into an existing dataset."""
     from sand.core.limits import limits_from_settings
@@ -191,6 +292,7 @@ async def add_table(
     limits = limits_from_settings(settings)
     saved: Path | None = None
     try:
+        sheet_filter = _parse_sheets_form(sheets)
         max_bytes = limits.max_ingest_bytes
         saved = await _save_upload(file, max_bytes=max_bytes)
         result = ingest_file(
@@ -199,6 +301,7 @@ async def add_table(
             db_path=settings.db_path(dataset_id),
             table_name=table_name,
             if_exists="replace" if replace else "fail",
+            xlsx_sheets=sheet_filter,
         )
     except HTTPException:
         raise
@@ -230,11 +333,78 @@ def delete_orphan(stem: str) -> dict:
 def dataset_schema(dataset_id: str) -> dict:
     try:
         with dataset_client(dataset_id, read_only=True) as client:
-            return {"dataset_id": dataset_id, "schema": client.schema(), "tables": client.table_names()}
+            lineage: dict[str, dict] = {}
+            try:
+                meta = client.metadata()
+                for row in meta.to_dict(orient="records"):
+                    name = row.get("table_name")
+                    if not name:
+                        continue
+                    lineage[str(name)] = {
+                        "source_file": row.get("source_file"),
+                        "sheet_name": row.get("sheet_name"),
+                        "row_count": row.get("row_count"),
+                    }
+            except Exception:
+                lineage = {}
+            return {
+                "dataset_id": dataset_id,
+                "schema": client.schema(),
+                "tables": client.table_names(),
+                "lineage": lineage,
+            }
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise http_error_from_exc(exc) from exc
+
+
+@router.get("/{dataset_id}/rows/{table}")
+def dataset_table_rows(dataset_id: str, table: str, limit: int = 50, offset: int = 0) -> dict:
+    """Paginated sample rows for the Data tab peek."""
+    from sand.core.limits import limits_from_settings
+
+    limits = limits_from_settings()
+    limit = max(1, min(int(limit), min(500, limits.max_offline_ask_rows)))
+    offset = max(0, int(offset))
+    try:
+        with dataset_client(dataset_id, read_only=True) as client:
+            if table not in client.table_names():
+                raise ValueError(f"Unknown table: {table}")
+            total = int(client.fetchall(f'SELECT COUNT(*) FROM "{table}"')[0][0])
+            df = client.to_dataframe(
+                f'SELECT * FROM "{table}" LIMIT {limit} OFFSET {offset}'
+            )
+            columns = list(df.columns)
+            rows = df.where(df.notnull(), None).to_dict(orient="records")
+            return {
+                "dataset_id": dataset_id,
+                "table": table,
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+                "offset": offset,
+                "limit": limit,
+                "total_rows": total,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise http_error_from_exc(exc) from exc
+
+
+class RenameDatasetRequest(BaseModel):
+    new_id: str
+
+
+@router.post("/{dataset_id}/rename")
+def rename_dataset(dataset_id: str, body: RenameDatasetRequest) -> dict:
+    store = DatasetStore()
+    try:
+        path = store.rename(dataset_id, body.new_id)
+    except Exception as exc:  # noqa: BLE001
+        raise http_error_from_exc(exc) from exc
+    return {"dataset_id": path.stem, "db_path": str(path), "renamed_from": dataset_id}
 
 
 @router.get("/{dataset_id}/profile/{table}")

@@ -188,15 +188,22 @@ def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFram
 
     limits = limits_from_settings()
     sqls: list[str] = []
-    temp_name = "_sand_join_tmp_0"
-    first = plan.steps[0].model_copy(update={"as_table": temp_name, "limit": None})
-    _, sql = execute_join(client, first)
+    # Avoid ``_sand_*`` names: table_names()/schema() hide that prefix, and
+    # sanitize_table_name strips leading underscores.
+    temp_name = "tmp_join_0"
+    first = plan.steps[0].model_copy(update={"as_table": None, "limit": None})
+    sql = build_join_sql(client, first)
+    guard_result_rows(client, sql, max_rows=limits.max_materialize_rows, action="join plan step")
+    client.execute(f'CREATE OR REPLACE TABLE "{temp_name}" AS {sql}')
     sqls.append(sql)
 
     for i, step in enumerate(plan.steps[1:], start=1):
-        next_temp = f"_sand_join_tmp_{i}"
-        rewritten = step.model_copy(update={"left": temp_name, "as_table": next_temp, "limit": None})
-        _, sql = execute_join(client, rewritten)
+        next_temp = f"tmp_join_{i}"
+        left = temp_name if step.left in {"__prev__", temp_name} or step.left.startswith("tmp_join_") else step.left
+        rewritten = step.model_copy(update={"left": left, "as_table": None, "limit": None})
+        sql = build_join_sql(client, rewritten)
+        guard_result_rows(client, sql, max_rows=limits.max_materialize_rows, action="join plan step")
+        client.execute(f'CREATE OR REPLACE TABLE "{next_temp}" AS {sql}')
         sqls.append(sql)
         try:
             client.execute(f'DROP TABLE IF EXISTS "{temp_name}"')
@@ -228,7 +235,7 @@ def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFram
 
     for i in range(len(plan.steps)):
         try:
-            client.execute(f'DROP TABLE IF EXISTS "_sand_join_tmp_{i}"')
+            client.execute(f'DROP TABLE IF EXISTS "tmp_join_{i}"')
         except Exception:
             pass
     return df, final_sql

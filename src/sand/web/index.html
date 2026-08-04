@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SAND — Spreadsheets Are Not Databases</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="/static/vendor/plotly/plotly.min.js" charset="utf-8"></script>
 <link rel="stylesheet" href="/static/styles.css" />
 
 </head>
@@ -14,7 +14,11 @@
       <h1>SAND</h1>
       <p>Upload spreadsheets into a dataset, join them with explicit keys, then ask questions. Answers come back as charts.</p>
     </div>
-    <div class="active-dataset-badge">Active dataset: <strong id="active-dataset-label">none</strong></div>
+    <div class="header-actions">
+      <div class="active-dataset-badge">Active dataset: <strong id="active-dataset-label">none</strong></div>
+      <a class="docs-link secondary small" href="/docs" target="_blank" rel="noopener">API docs</a>
+      <button class="secondary small" id="theme-toggle" type="button" title="Toggle light/dark theme">Theme</button>
+    </div>
   </header>
 
   <div class="panel stack" style="margin: 0.75rem 1.75rem 0;">
@@ -28,19 +32,27 @@
     </div>
     <p class="hint" id="auth-hint" style="display:none;margin:0.35rem 0 0;"></p>
     <p class="hint" id="disk-usage" style="margin:0.35rem 0 0;"></p>
+    <p class="hint" id="limits-hint" style="margin:0.35rem 0 0;"></p>
   </div>
 
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-view="data" type="button">1. Data</button>
-    <button class="tab" data-view="join" type="button">2. Join</button>
-    <button class="tab" data-view="chat" type="button">3. Chat &amp; charts</button>
+  <nav class="tabs" role="tablist" aria-label="Main views">
+    <button class="tab active" data-view="data" type="button" role="tab" id="tab-data" aria-selected="true" aria-controls="view-data">1. Data</button>
+    <button class="tab" data-view="join" type="button" role="tab" id="tab-join" aria-selected="false" aria-controls="view-join">2. Join</button>
+    <button class="tab" data-view="sql" type="button" role="tab" id="tab-sql" aria-selected="false" aria-controls="view-sql">3. SQL</button>
+    <button class="tab" data-view="chat" type="button" role="tab" id="tab-chat" aria-selected="false" aria-controls="view-chat">4. Chat &amp; charts</button>
   </nav>
 
   <main>
     <p class="error" id="error"></p>
 
     <!-- DATA -->
-    <section class="view active" id="view-data">
+    <section class="view active" id="view-data" role="tabpanel" aria-labelledby="tab-data">
+      <div id="locked-box" class="warn-box" style="display:none;margin:0 0 0.75rem;">
+        <div id="locked-hint"></div>
+        <div class="btn-row" style="margin-top:0.5rem;">
+          <button class="secondary small" id="locked-retry-btn" type="button">Retry</button>
+        </div>
+      </div>
       <div class="grid-2">
         <div class="panel stack">
           <h2>Upload spreadsheets</h2>
@@ -48,10 +60,14 @@
             <label for="dataset-id">Dataset name</label>
             <input id="dataset-id" type="text" placeholder="e.g. shop" />
           </div>
-          <div>
-            <label for="file">Choose one or more CSV / Excel files</label>
+          <div id="upload-dropzone" class="upload-dropzone">
+            <label for="file">Choose one or more CSV / Excel / Parquet files</label>
             <input id="file" type="file" accept=".csv,.xlsx,.parquet" multiple />
+            <p class="drop-hint hint">Drop CSV / XLSX / Parquet here</p>
             <ul class="file-list hint" id="file-list"></ul>
+          </div>
+          <div id="sheet-picker" class="stack" style="display:none;">
+            <label>Excel sheets (optional — leave unchecked to ingest all)</label>
           </div>
           <label class="checkbox-row">
             <input id="replace" type="checkbox" checked />
@@ -64,6 +80,19 @@
           </div>
           <p class="ok" id="upload-status"></p>
           <p class="hint">Tip: select several files at once, or upload more later into the same dataset. "Load sample shop" seeds a demo dataset with sales, customers and products tables.</p>
+          <div class="divider"></div>
+          <h3>Import DuckDB file</h3>
+          <div class="row">
+            <div>
+              <label for="import-duckdb-file">.duckdb file</label>
+              <input id="import-duckdb-file" type="file" accept=".duckdb" />
+            </div>
+            <div>
+              <label for="import-dataset-id">Dataset id (optional)</label>
+              <input id="import-dataset-id" type="text" placeholder="defaults to filename" />
+            </div>
+          </div>
+          <button class="secondary" id="import-duckdb-btn" type="button">Import</button>
         </div>
         <div class="panel stack">
           <h2>Datasets</h2>
@@ -84,6 +113,7 @@
           </div>
           <div class="btn-row">
             <button class="secondary small" id="duplicate-btn" type="button">Duplicate dataset</button>
+            <button class="secondary small" id="rename-dataset-btn" type="button">Rename dataset</button>
             <button class="secondary small" id="delete-dataset-btn" type="button">Delete dataset</button>
             <button class="secondary small" id="export-db-btn" type="button">Export DuckDB</button>
             <button class="secondary small" id="checkpoint-btn" type="button">Checkpoint</button>
@@ -105,9 +135,21 @@
             <button class="danger small" id="drop-table-btn" type="button">Drop table</button>
             <button class="secondary small" id="export-table-csv-btn" type="button">Export CSV</button>
             <button class="secondary small" id="export-table-xlsx-btn" type="button">Export XLSX</button>
+            <button class="secondary small" id="export-table-parquet-btn" type="button">Export Parquet</button>
             <button class="secondary small" id="review-types-btn" type="button">Review types</button>
           </div>
           <div id="profile-view"></div>
+          <div id="table-rows-peek" class="stack" style="display:none;margin-top:0.75rem;">
+            <div class="btn-row" style="justify-content:space-between;margin-top:0;">
+              <h3 style="margin:0;">Sample rows</h3>
+              <div class="btn-row" style="margin-top:0;">
+                <button class="secondary small" id="peek-prev-btn" type="button">Prev</button>
+                <button class="secondary small" id="peek-next-btn" type="button">Next</button>
+              </div>
+            </div>
+            <div id="table-rows-peek-body"></div>
+            <p class="hint" id="table-rows-peek-meta"></p>
+          </div>
           <div id="types-editor" style="display:none;">
             <div class="divider"></div>
             <h3>Inferred types</h3>
@@ -124,11 +166,12 @@
     </section>
 
     <!-- JOIN -->
-    <section class="view" id="view-join">
+    <section class="view" id="view-join" role="tabpanel" aria-labelledby="tab-join">
       <p class="hint">Active dataset: <strong id="join-active-dataset">none — pick one on the Data tab</strong></p>
       <div class="grid-2">
         <div class="panel stack">
-          <h2>Join two tables</h2>
+          <h2>Join tables</h2>
+          <p class="hint">Step 1 — pick two tables and keys. Add more steps to chain joins.</p>
           <div class="row">
             <div>
               <label for="join-left">Left table</label>
@@ -149,6 +192,8 @@
             <button class="secondary" id="add-key-btn" type="button">Add key</button>
             <p class="hint" id="shared-hint"></p>
           </div>
+          <div id="join-steps"></div>
+          <button class="secondary" id="add-join-step-btn" type="button">Add join step</button>
           <div class="row">
             <div>
               <label for="join-how">Join type</label>
@@ -165,19 +210,19 @@
             </div>
           </div>
           <div>
-            <label for="join-recipe-name">Recipe name (optional, for saving)</label>
+            <label for="join-recipe-name">Recipe name (optional — saved when you Run join)</label>
             <input id="join-recipe-name" type="text" placeholder="e.g. sales-with-customers" />
           </div>
           <div class="btn-row">
             <button class="secondary" id="estimate-btn" type="button">Estimate</button>
             <button id="join-btn" type="button">Run join</button>
-            <button class="secondary" id="save-recipe-btn" type="button">Save recipe</button>
           </div>
           <p class="ok" id="join-status"></p>
           <div id="estimate-result"></div>
         </div>
         <div class="panel stack">
           <h2>Saved recipes</h2>
+          <p class="hint">Run or delete saved recipes. New recipes are saved when you Run join with a name.</p>
           <ul class="recipe-list" id="recipe-list"></ul>
           <p class="empty-state" id="recipe-empty">No saved recipes for this dataset yet.</p>
         </div>
@@ -189,6 +234,7 @@
           <div class="btn-row" style="margin-top:0;">
             <button class="secondary small" id="export-join-csv-btn" type="button">Export CSV</button>
             <button class="secondary small" id="export-join-xlsx-btn" type="button">Export XLSX</button>
+            <button class="secondary small" id="export-join-parquet-btn" type="button">Export Parquet</button>
           </div>
         </div>
         <div id="join-preview" class="hint">Run a join to see rows here.</div>
@@ -196,13 +242,62 @@
       </div>
     </section>
 
+    <!-- SQL -->
+    <section class="view" id="view-sql" role="tabpanel" aria-labelledby="tab-sql">
+      <p class="hint">Active dataset: <strong id="sql-active-dataset">none — pick one on the Data tab</strong></p>
+      <div class="grid-2">
+        <div class="panel stack">
+          <h2>Run SQL</h2>
+          <p class="hint">No LLM required — write DuckDB SQL directly.</p>
+          <label for="sql-input">SQL</label>
+          <textarea id="sql-input" rows="6" placeholder="SELECT region, SUM(amount) AS total FROM sales GROUP BY region"></textarea>
+          <label for="sql-chart-type">Chart type (optional)</label>
+          <select id="sql-chart-type">
+            <option value="">Best practice (auto)</option>
+            <option value="bar">Bar</option>
+            <option value="line">Line</option>
+            <option value="scatter">Scatter</option>
+            <option value="pie">Pie</option>
+            <option value="heatmap">Heatmap</option>
+            <option value="table">Table</option>
+          </select>
+          <div class="btn-row">
+            <button id="sql-run-preview-btn" type="button">Run preview</button>
+            <button class="secondary" id="sql-run-full-btn" type="button">Run full</button>
+            <button class="secondary" id="sql-cancel-btn" type="button" style="display:none;">Cancel</button>
+          </div>
+          <div class="notice" id="sql-preview-notice"></div>
+        </div>
+        <div class="panel stack">
+          <div class="btn-row" style="justify-content:space-between;">
+            <h2 style="margin:0;">Result</h2>
+            <div class="btn-row" style="margin-top:0;">
+              <button class="secondary small" id="export-sql-csv-btn" type="button">Export CSV</button>
+              <button class="secondary small" id="export-sql-xlsx-btn" type="button">Export XLSX</button>
+              <button class="secondary small" id="export-sql-parquet-btn" type="button">Export Parquet</button>
+            </div>
+          </div>
+          <div id="sql-preview" class="hint">Run SQL to see rows here.</div>
+          <div id="sql-chart"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- CHAT -->
-    <section class="view" id="view-chat">
+    <section class="view" id="view-chat" role="tabpanel" aria-labelledby="tab-chat">
       <p class="hint">Active dataset: <strong id="chat-active-dataset">none — pick one on the Data tab</strong></p>
       <div class="grid-2">
         <div class="panel">
           <h2>Ask about your data</h2>
           <div id="chat-log"></div>
+          <div id="last-sql-panel" class="stack" style="display:none;margin:0.75rem 0;">
+            <label for="last-sql-input">Last SQL (editable)</label>
+            <textarea id="last-sql-input" rows="3"></textarea>
+            <div class="btn-row">
+              <button class="secondary small" id="run-last-sql-btn" type="button">Run SQL</button>
+              <button class="secondary small" id="copy-last-sql-btn" type="button">Copy SQL</button>
+            </div>
+          </div>
           <div class="stack">
             <div class="row">
               <div>
@@ -225,6 +320,39 @@
               </div>
             </div>
             <div>
+              <label>Filter (no LLM)</label>
+              <div class="row">
+                <div>
+                  <label for="filter-column">Column</label>
+                  <select id="filter-column"><option value="">(pick column)</option></select>
+                </div>
+                <div>
+                  <label for="filter-op">Operator</label>
+                  <select id="filter-op">
+                    <option value="eq">eq</option>
+                    <option value="ne">ne</option>
+                    <option value="gt">gt</option>
+                    <option value="gte">gte</option>
+                    <option value="lt">lt</option>
+                    <option value="lte">lte</option>
+                    <option value="like">like</option>
+                    <option value="ilike">ilike</option>
+                    <option value="in">in</option>
+                    <option value="is_null">is_null</option>
+                    <option value="is_not_null">is_not_null</option>
+                    <option value="between">between</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="filter-value">Value</label>
+                  <input id="filter-value" type="text" placeholder="value or a,b for in" />
+                </div>
+              </div>
+              <div class="btn-row">
+                <button class="secondary" id="filter-apply-btn" type="button">Filter</button>
+              </div>
+            </div>
+            <div>
               <label>Offline asks</label>
               <div class="btn-row" style="margin-top:0;flex-wrap:wrap;">
                 <button class="secondary" id="ask-profile-btn" type="button">Profile</button>
@@ -232,6 +360,7 @@
                 <button class="secondary" id="ask-topn-btn" type="button">Top-N</button>
                 <button class="secondary" id="ask-groupby-btn" type="button">Group-by</button>
                 <button class="secondary" id="ask-ts-btn" type="button">Time series</button>
+                <button class="secondary" id="ask-filter-btn" type="button">Filter</button>
               </div>
             </div>
             <p class="hint" id="llm-hint" style="display:none;"></p>
@@ -249,8 +378,26 @@
             <textarea id="prompt" rows="3" placeholder="e.g. Show revenue by region from the joined table as a bar chart"></textarea>
             <div class="btn-row">
               <button id="ask-btn" type="button">Ask</button>
+              <button class="secondary" id="cancel-query-btn" type="button" style="display:none;">Cancel</button>
               <button class="secondary" id="clear-history-btn" type="button">Clear history</button>
             </div>
+            <div class="divider"></div>
+            <h3>Saved views</h3>
+            <p class="hint">Pin the last SQL as a reusable view. Optional cache stores the last chart payload; over-cap loads up to max result rows instead of the chart sample limit.</p>
+            <div class="row">
+              <div>
+                <label for="view-name">View name</label>
+                <input id="view-name" type="text" placeholder="e.g. revenue_by_region" />
+              </div>
+              <div>
+                <label>&nbsp;</label>
+                <button class="secondary" id="save-view-btn" type="button">Save view</button>
+              </div>
+            </div>
+            <label class="checkbox-row"><input id="view-cache" type="checkbox" /> Cache result after run</label>
+            <label class="checkbox-row"><input id="view-over-cap" type="checkbox" /> Allow chart sample over default cap</label>
+            <ul class="recipe-list" id="view-list"></ul>
+            <p class="empty-state" id="view-empty">No saved views yet.</p>
           </div>
         </div>
         <div class="panel">
@@ -259,6 +406,7 @@
             <div class="btn-row" style="margin-top:0;">
               <button class="secondary small" id="export-chat-csv-btn" type="button">Export CSV</button>
               <button class="secondary small" id="export-chat-xlsx-btn" type="button">Export XLSX</button>
+              <button class="secondary small" id="export-chat-parquet-btn" type="button">Export Parquet</button>
             </div>
           </div>
           <div class="notice" id="preview-notice"></div>
