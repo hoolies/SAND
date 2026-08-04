@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -11,12 +12,12 @@ from sand.charts.planner import plan_chart
 from sand.charts.plotly_renderer import render_figure
 from sand.charts.specs import ChartSpec, ChartType
 from sand.core.config import get_settings
+from sand.core.store import DatasetStore
 from sand.db.duckdb_client import DuckDBClient
 from sand.ingest.loader import ingest_file, ingest_files
 from sand.llm.nlsql import NLSQLChat
 from sand.queries.common import CommonQueries
 from sand.queries.joins import JoinKey, JoinPlan, JoinSpec, execute_join, execute_join_plan
-from sand.core.store import DatasetStore
 
 
 class Dataset:
@@ -142,7 +143,7 @@ class Dataset:
         return fig
 
     def ask(self, message: str, *, chart_type: ChartType | None = None) -> dict[str, Any]:
-        result = NLSQLChat(self.client).ask(message, chart_type=chart_type)
+        result = NLSQLChat(self.client, dataset_id=self.dataset_id).ask(message, chart_type=chart_type)
         fig = None
         try:
             df = self.client.to_dataframe(result.sql)

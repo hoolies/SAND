@@ -14,4 +14,5 @@ dist/
 *.duckdb
 .env
 
-# Prefer pyproject.toml; requirements.txt is a lock-style compile for Docker/pip only
+# Prefer pyproject.toml for declared deps; requirements.txt for pinned installs.
+# uv.lock is only meaningful if you use uv locally — not required for pip/Docker/CI.

@@ -9,6 +9,8 @@ from pathlib import Path
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    import os
+
     import uvicorn
 
     from sand.core.config import get_settings
@@ -16,6 +18,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
     settings = get_settings()
     host = args.host or settings.host
     port = args.port or settings.port
+
+    public_bind = host in {"0.0.0.0", "::", "[::]"}
+    token = (settings.api_token or "").strip()
+    allow_insecure = settings.allow_insecure_bind or os.environ.get("SAND_ALLOW_INSECURE_BIND", "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if public_bind and not token and not allow_insecure:
+        print(
+            "Refusing to bind "
+            f"{host}:{port} without SAND_API_TOKEN.\n"
+            "Compose publishes 127.0.0.1 by default. For a public bind, set SAND_API_TOKEN, "
+            "or set SAND_ALLOW_INSECURE_BIND=1 to override (not recommended).",
+            file=sys.stderr,
+        )
+        return 2
+
     uvicorn.run("sand.api.app:app", host=host, port=port, reload=args.reload)
     return 0
 

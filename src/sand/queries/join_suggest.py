@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
 
 from sand.db.duckdb_client import DuckDBClient
-from sand.queries.joins import JoinKey, JoinSpec, build_join_sql, execute_join
+from sand.queries.joins import JoinSpec, build_join_sql, execute_join
 
 _ID_HINT = re.compile(r"(^id$|_id$|id$|code$|key$|sku$|uuid$)", re.IGNORECASE)
 

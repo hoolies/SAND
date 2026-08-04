@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from sand.core.limits import ResourceLimitError
+from sand.core.store import DatasetStore
 from sand.db.duckdb_client import DuckDBClient
 from sand.db.pool import DatabaseLockedError
-from sand.core.limits import ResourceLimitError
 from sand.llm.openai_compat import LLMNotConfiguredError
-from sand.core.store import DatasetStore
 
 
 def error_detail(code: str, message: str, **extra: Any) -> dict[str, Any]:

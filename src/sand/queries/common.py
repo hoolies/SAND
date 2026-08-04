@@ -245,7 +245,10 @@ class CommonQueries:
             right_keys = [right_on] if isinstance(right_on, str) else list(right_on or [])
             if len(left_keys) != len(right_keys) or not left_keys:
                 raise ValueError("left_on and right_on must be same non-zero length")
-            keys = [JoinKey(left=l, right=r) for l, r in zip(left_keys, right_keys, strict=True)]
+            keys = [
+                JoinKey(left=left_key, right=right_key)
+                for left_key, right_key in zip(left_keys, right_keys, strict=True)
+            ]
         elif isinstance(on, str):
             keys = [on]
         else:

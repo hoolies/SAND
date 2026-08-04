@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     max_data_dir_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GiB; 0 disables
     query_timeout_seconds: float = 30.0
     api_token: str = ""  # optional Bearer / X-SAND-Token for Docker publishes
+    allow_insecure_bind: bool = False  # allow 0.0.0.0 without api_token
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

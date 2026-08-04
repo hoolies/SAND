@@ -1,19 +1,22 @@
-# Publishes the API on the host (port map binds beyond container localhost).
-# Prefer accessing only from your machine, or set SAND_API_TOKEN and send
-# Authorization: Bearer <token> (or X-SAND-Token) on API requests.
+# Host publish is localhost-only by default (not 0.0.0.0).
+# For remote access: change ports to "8765:8765" AND set a non-empty SAND_API_TOKEN.
 services:
   sand:
     build: .
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     volumes:
       - sand-data:/data
     environment:
       SAND_DATA_DIR: /data
+      SAND_HOST: "0.0.0.0"
+      SAND_PORT: "8765"
       SAND_API_TOKEN: ${SAND_API_TOKEN:-}
       SAND_LLM_BASE_URL: ${SAND_LLM_BASE_URL:-https://api.openai.com/v1}
       SAND_LLM_API_KEY: ${SAND_LLM_API_KEY:-}
       SAND_LLM_MODEL: ${SAND_LLM_MODEL:-gpt-4o-mini}
+      # Set to 1 only if you intentionally publish without a token (not recommended).
+      SAND_ALLOW_INSECURE_BIND: ${SAND_ALLOW_INSECURE_BIND:-0}
 
 volumes:
   sand-data:

@@ -40,7 +40,7 @@ app = FastAPI(
         "413 limit_exceeded, 423 locked, 502 llm_upstream, 503 llm_not_configured|llm_unreachable, "
         "504 timeout, 410 deprecated."
     ),
-    version="0.1.0",
+    version="0.8.1",
     lifespan=lifespan,
 )
 

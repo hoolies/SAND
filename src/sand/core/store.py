@@ -78,14 +78,18 @@ class DatasetStore:
         return self.settings.db_path(dataset_id).exists()
 
     def delete(self, dataset_id: str) -> None:
+        from sand.core.chat_store import chat_sidecar_path
+
         path = self.get_path(dataset_id)
         close_client(path)
         path.unlink()
         for side in (path.with_suffix(path.suffix + ".wal"), path.with_suffix(".duckdb.wal")):
             if side.exists():
                 side.unlink(missing_ok=True)
+        chat_sidecar_path(dataset_id, self.settings).unlink(missing_ok=True)
 
     def duplicate(self, dataset_id: str, new_id: str) -> Path:
+        from sand.core.chat_store import chat_sidecar_path
         from sand.core.limits import check_data_dir_budget
 
         src = self.get_path(dataset_id)
@@ -101,6 +105,9 @@ class DatasetStore:
         wal = Path(str(src) + ".wal")
         if wal.exists():
             shutil.copy2(wal, Path(str(dest) + ".wal"))
+        src_chat = chat_sidecar_path(dataset_id, self.settings)
+        if src_chat.exists():
+            shutil.copy2(src_chat, chat_sidecar_path(safe, self.settings))
         return dest
 
     def export_bytes(self, dataset_id: str) -> bytes:

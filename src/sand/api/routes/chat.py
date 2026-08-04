@@ -7,9 +7,10 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from sand.api.errors import dataset_client, http_error_from_exc, open_dataset, tabular_result
+from sand.api.errors import dataset_client, http_error_from_exc, tabular_result
 from sand.charts.specs import ChartSpec, ChartType
-from sand.core.dataset_meta import clear_chat, list_chat
+from sand.core.chat_store import clear_chat, list_chat
+from sand.core.store import DatasetStore
 from sand.llm.nlsql import NLSQLChat
 from sand.queries.common import AggFunc, CommonQueries
 
@@ -54,16 +55,15 @@ class CommonAskRequest(BaseModel):
 
 @router.post("")
 def chat(body: ChatRequest) -> dict:
-    client = open_dataset(body.dataset_id)
-
     try:
-        result = NLSQLChat(client).ask(
-            body.message,
-            chart_type=body.chart_type,
-            chart_override=body.chart,
-            run_full=body.run_full,
-            sql_override=body.sql,
-        )
+        with dataset_client(body.dataset_id, read_only=True) as client:
+            result = NLSQLChat(client, dataset_id=body.dataset_id).ask(
+                body.message,
+                chart_type=body.chart_type,
+                chart_override=body.chart,
+                run_full=body.run_full,
+                sql_override=body.sql,
+            )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -86,8 +86,10 @@ def chat(body: ChatRequest) -> dict:
 @router.get("/{dataset_id}/history")
 def chat_history(dataset_id: str, limit: int = 50) -> dict:
     try:
-        with dataset_client(dataset_id, read_only=True) as client:
-            turns = list_chat(client, limit=limit)
+        store = DatasetStore()
+        store.get_path(dataset_id)  # 404 if missing
+        with dataset_client(dataset_id, store=store, read_only=True) as client:
+            turns = list_chat(dataset_id, limit=limit, migrate_from=client)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -98,8 +100,9 @@ def chat_history(dataset_id: str, limit: int = 50) -> dict:
 @router.delete("/{dataset_id}/history")
 def chat_clear(dataset_id: str) -> dict:
     try:
-        client = open_dataset(dataset_id)
-        clear_chat(client)
+        store = DatasetStore()
+        store.get_path(dataset_id)
+        clear_chat(dataset_id)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 
 from sand.api.app import app
 from sand.core.config import Settings
+from sand.core.limits import ResourceLimitError, check_file_size, guard_result_rows, limits_from_settings
 from sand.db.duckdb_client import DuckDBClient
 from sand.db.pool import close_all, close_client, get_client
 from sand.ingest.loader import ingest_files
-from sand.core.limits import ResourceLimitError, check_file_size, guard_result_rows, limits_from_settings
 
 
 @pytest.fixture(autouse=True)
@@ -67,10 +67,10 @@ def test_join_no_pandas_fallback_and_ctas(tmp_path: Path) -> None:
 
 
 def test_list_datasets_shape_and_common_ask(tmp_path: Path, monkeypatch) -> None:
-    import sand.core.config as config_mod
-    import sand.core.store as store_mod
     import sand.api.routes.datasets as routes_ds
+    import sand.core.config as config_mod
     import sand.core.limits as limits_mod
+    import sand.core.store as store_mod
 
     data_dir = tmp_path / "data"
     settings = Settings(data_dir=data_dir, max_result_rows=1000)
@@ -129,10 +129,10 @@ def test_limits_from_settings() -> None:
 
 
 def test_sanitize_dataset_id_and_sample_shape(tmp_path: Path, monkeypatch) -> None:
-    from sand.core.config import Settings, sanitize_dataset_id
-    from sand.samples import load_sample_shop
     import sand.core.config as config_mod
     import sand.samples as samples_mod
+    from sand.core.config import Settings, sanitize_dataset_id
+    from sand.samples import load_sample_shop
 
     assert sanitize_dataset_id("shop") == "shop"
     assert sanitize_dataset_id("My Shop!") == "My_Shop"
@@ -196,9 +196,9 @@ def test_parquet_and_xlsx_native(tmp_path: Path) -> None:
 
 
 def test_orphan_delete_and_health(tmp_path: Path, monkeypatch) -> None:
+    import sand.api.routes.datasets as routes_ds
     import sand.core.config as config_mod
     import sand.core.store as store_mod
-    import sand.api.routes.datasets as routes_ds
 
     data_dir = tmp_path / "data"
     settings = Settings(data_dir=data_dir, llm_api_key="")
@@ -223,9 +223,9 @@ def test_orphan_delete_and_health(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_filter_rejects_raw_where_api(tmp_path: Path, monkeypatch) -> None:
+    import sand.api.routes.datasets as routes_ds
     import sand.core.config as config_mod
     import sand.core.store as store_mod
-    import sand.api.routes.datasets as routes_ds
 
     data_dir = tmp_path / "data"
     settings = Settings(data_dir=data_dir)
@@ -293,8 +293,8 @@ def test_limit_literal_does_not_bypass_guard(tmp_path: Path) -> None:
 
 
 def test_api_token_middleware(tmp_path: Path, monkeypatch) -> None:
-    import sand.core.config as config_mod
     import sand.api.app as app_mod
+    import sand.core.config as config_mod
 
     data_dir = tmp_path / "data"
     settings = Settings(data_dir=data_dir, api_token="secret-token")
@@ -363,3 +363,58 @@ def test_export_csv_streams(tmp_path: Path, monkeypatch) -> None:
     assert "text/csv" in resp.headers.get("content-type", "")
     text = resp.text
     assert "region" in text and "East" in text
+
+    xlsx = client.post(
+        "/export/xlsx",
+        json={"dataset_id": "sales", "table": "sales", "format": "xlsx"},
+    )
+    assert xlsx.status_code == 200, xlsx.text
+    assert "spreadsheetml" in xlsx.headers.get("content-type", "")
+    assert xlsx.content[:2] == b"PK"  # zip/xlsx
+
+
+def test_chat_sidecar_history(tmp_path: Path, monkeypatch) -> None:
+    import sand.core.chat_store as chat_mod
+    import sand.core.config as config_mod
+    from sand.core.chat_store import ChatTurn, append_chat, chat_sidecar_path, clear_chat, list_chat
+    from sand.db.pool import close_all
+    from sand.ingest.loader import ingest_file
+    from sand.llm.nlsql import NLSQLChat
+
+    close_all()
+    data_dir = tmp_path / "data"
+    settings = Settings(data_dir=data_dir)
+    monkeypatch.setenv("SAND_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(config_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(chat_mod, "get_settings", lambda: settings)
+
+    csv_path = tmp_path / "sales.csv"
+    pd.DataFrame({"region": ["East", "West"], "amount": [10, 20]}).to_csv(csv_path, index=False)
+    ingest_file(csv_path, dataset_id="sales", db_path=settings.db_path("sales"))
+
+    append_chat("sales", ChatTurn(role="user", content="hi"), settings=settings)
+    append_chat("sales", ChatTurn(role="assistant", content="hello", sql="SELECT 1"), settings=settings)
+    turns = list_chat("sales", limit=10, settings=settings)
+    assert len(turns) == 2
+    assert turns[0].role == "user"
+    assert chat_sidecar_path("sales", settings).exists()
+
+    client = TestClient(app)
+    hist = client.get("/chat/sales/history")
+    assert hist.status_code == 200, hist.text
+    assert len(hist.json()["turns"]) == 2
+
+    # Read-only SQL ask uses dataset_id sidecar for history (not DuckDB writes)
+    close_all()
+    with DuckDBClient(settings.db_path("sales"), read_only=True) as db:
+        result = NLSQLChat(db, dataset_id="sales").ask(
+            "noop",
+            sql_override="SELECT region, amount FROM sales",
+            persist=False,
+        )
+        assert result.row_count >= 1
+
+    cleared = client.delete("/chat/sales/history")
+    assert cleared.status_code == 200
+    assert list_chat("sales", settings=settings) == []
+    clear_chat("sales", settings=settings)

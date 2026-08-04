@@ -10,13 +10,13 @@ from fastapi.testclient import TestClient
 
 from sand.api.app import app
 from sand.core.config import Settings
+from sand.core.dataset_meta import list_recipes, save_recipe
 from sand.db.duckdb_client import DuckDBClient
 from sand.ingest.loader import ingest_files
 from sand.ingest.typing import build_type_plan
 from sand.llm.nlsql import assert_readonly_sql, with_eval_limit
 from sand.queries.join_suggest import estimate_join, suggest_join_keys
 from sand.queries.joins import JoinSpec
-from sand.core.dataset_meta import save_recipe, list_recipes
 from sand.samples import load_sample_shop
 
 

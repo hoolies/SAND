@@ -152,8 +152,8 @@ _DUCK_TYPES = {
 
 def apply_types_sql(client: Any, table: str, plan: TableTypePlan) -> int:
     """Rewrite a table in DuckDB using TRY_CAST — no full pandas round-trip."""
-    from sand.db.duckdb_client import sanitize_table_name
     from sand.core.limits import guard_table_rows, limits_from_settings
+    from sand.db.duckdb_client import sanitize_table_name
 
     limits = limits_from_settings()
     guard_table_rows(client, table, max_rows=limits.max_materialize_rows, action="type apply")

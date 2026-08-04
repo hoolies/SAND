@@ -146,7 +146,7 @@ def _resolve_select(col: str, alias_left: str, alias_right: str) -> str:
 
 def execute_join(client: DuckDBClient, spec: JoinSpec) -> tuple[pd.DataFrame, str]:
     """Run a join in DuckDB. Failures raise — no silent pandas fallback."""
-    from sand.core.limits import limits_from_settings, guard_result_rows
+    from sand.core.limits import guard_result_rows, limits_from_settings
 
     sql = build_join_sql(client, spec)
     limits = limits_from_settings()
@@ -184,7 +184,7 @@ def execute_join_plan(client: DuckDBClient, plan: JoinPlan) -> tuple[pd.DataFram
             step = step.model_copy(update={"limit": plan.limit})
         return execute_join(client, step)
 
-    from sand.core.limits import limits_from_settings, guard_result_rows
+    from sand.core.limits import guard_result_rows, limits_from_settings
 
     limits = limits_from_settings()
     sqls: list[str] = []

@@ -123,6 +123,29 @@ class DuckDBClient:
         cleaned = sql.strip().rstrip(";")
         self.execute(f"COPY ({cleaned}) TO '{path_lit}' (HEADER, DELIMITER ',', FORMAT CSV)")
 
+    def copy_to_xlsx(self, sql: str, dest: Path) -> None:
+        """Export a SELECT to XLSX via CSV staging + openpyxl write-only (bounded memory)."""
+        import csv
+        import tempfile
+
+        from openpyxl import Workbook
+
+        tmp = tempfile.NamedTemporaryFile(prefix="sand_xlsx_", suffix=".csv", delete=False)
+        tmp_csv = Path(tmp.name)
+        tmp.close()
+        try:
+            self.copy_to_csv(sql, tmp_csv)
+            wb = Workbook(write_only=True)
+            ws = wb.create_sheet(title="export")
+            with tmp_csv.open(newline="", encoding="utf-8") as fh:
+                for row in csv.reader(fh):
+                    ws.append(row)
+            dest = Path(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            wb.save(dest)
+        finally:
+            tmp_csv.unlink(missing_ok=True)
+
     def table_names(self) -> list[str]:
         rows = self.fetchall(
             """

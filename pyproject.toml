@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sand"
-version = "0.1.0"
+version = "0.8.1"
 description = "Spreadsheets Are Not Databases — turn spreadsheets into a queryable DB with chat and charts"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +23,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "pyarrow>=15.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pyarrow>=15.0.0",
+    "ruff>=0.9.0",
+    "mypy>=1.14.0",
+    "types-openpyxl>=3.1.0",
+]
 
 [project.scripts]
 sand = "sand.cli:main"
@@ -37,3 +43,23 @@ sand = ["web/*", "samples/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",
+    "B008",  # FastAPI Depends/File/Form in defaults is idiomatic
+]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["sand"]
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = false

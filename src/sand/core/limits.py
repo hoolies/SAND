@@ -8,8 +8,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from sand.core.config import Settings, get_settings
-from sand.db.duckdb_client import DuckDBClient
 from sand.core.sql_scan import find_limit_value
+from sand.db.duckdb_client import DuckDBClient
 
 _SIMPLE_TABLE_RE = re.compile(
     r"""^\s*SELECT\s+\*\s+FROM\s+(?:"([^"]+)"|([A-Za-z_][\w$]*))\s*(?:LIMIT\s+\d+\s*)?;?\s*$""",

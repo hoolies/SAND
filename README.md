@@ -37,8 +37,17 @@ export SAND_LLM_MODEL=gpt-4o-mini
 
 ```bash
 docker compose up --build
-# → http://127.0.0.1:8765
+# → http://127.0.0.1:8765  (published on localhost only)
 ```
+
+Remote publish requires a token:
+
+```bash
+SAND_API_TOKEN=secret docker compose up --build
+# then call APIs with: Authorization: Bearer secret
+```
+
+Image builds install pinned deps from `requirements.txt`, then the local package with `--no-deps`.
 
 ### Jupyter
 
@@ -77,7 +86,7 @@ ds.chart(sql="SELECT region, SUM(amount) AS total FROM enriched GROUP BY region"
 | GET/DELETE | `/chat/{id}/history` | Chat memory |
 | POST | `/export/{csv\|xlsx\|db}` | Export table/SQL result or whole `.duckdb` file |
 
-Datasets are stored under `.sand/data/<id>.duckdb`. Dataset ids are sanitized to `[A-Za-z0-9_-]` (max 64); path separators / `..` are rejected. Uploads are size-capped (`SAND_MAX_INGEST_BYTES`, default 200 MB) while streaming to disk. Join materialize / export / full chat results are row-capped (`SAND_MAX_*_ROWS`). Offline asks (`top_n` / `groupby` / `filter`) are capped by `SAND_MAX_OFFLINE_ASK_ROWS` (default 10 000).
+Datasets are stored under `.sand/data/<id>.duckdb`. Chat history is a sidecar `.sand/data/<id>.chat.jsonl` so asks can open DuckDB read-only. Dataset ids are sanitized to `[A-Za-z0-9_-]` (max 64); path separators / `..` are rejected. Uploads are size-capped (`SAND_MAX_INGEST_BYTES`, default 200 MB) while streaming to disk. Join materialize / export / full chat results are row-capped (`SAND_MAX_*_ROWS`). Offline asks (`top_n` / `groupby` / `filter`) are capped by `SAND_MAX_OFFLINE_ASK_ROWS` (default 10 000).
 
 ### Error responses
 
@@ -119,6 +128,22 @@ src/sand/
 scripts/bootstrap.sh
 tests/
 ```
+
+## Versioning
+
+Current release: **0.8.1**
+
+- Patch `0.0.1` — small fixes, hardening, refactors that do not change API/behavior contracts
+- Minor `0.1.0` — new features, or changes that break callers/API/CLI
+- Major `1.0.0` — complete redesign / stability commitment
+
+## Dependencies & lockfiles
+
+- **Source of truth for declared deps:** `pyproject.toml`
+- **Pinned install set for Docker/CI:** `requirements.txt`
+  (`uv pip compile pyproject.toml -o requirements.txt` or equivalent)
+- **`uv.lock` is only for uv users** — if you use `uv` locally for resolves/sync, keep it; everyone else (pip, Docker, CI) should ignore it and use `requirements.txt`. Do not treat `uv.lock` as the project-wide lockfile.
+- Dev tools (`ruff`, `mypy`, `pytest`) live in `.[dev]`
 
 ## Goals
 1. Transfer spreadsheet → DuckDB (analytics-first)

@@ -10,10 +10,10 @@ from typing import Any
 from sand.charts.planner import plan_chart
 from sand.charts.plotly_renderer import render_bundle
 from sand.charts.specs import ChartSpec, ChartType
-from sand.db.duckdb_client import DuckDBClient
-from sand.core.dataset_meta import ChatTurn, append_chat, list_chat
-from sand.llm.openai_compat import LLMNotConfiguredError, OpenAICompatClient
+from sand.core.chat_store import ChatTurn, append_chat, list_chat
 from sand.core.sql_scan import find_limit_value, sql_for_token_scan, strip_sql_comments
+from sand.db.duckdb_client import DuckDBClient
+from sand.llm.openai_compat import LLMNotConfiguredError, OpenAICompatClient
 
 # DDL/DML + DuckDB session/side-effect statements (REPLACE omitted: clashes with replace())
 _FORBIDDEN_KEYWORDS = re.compile(
@@ -178,8 +178,15 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 class NLSQLChat:
-    def __init__(self, client: DuckDBClient, llm: OpenAICompatClient | None = None):
+    def __init__(
+        self,
+        client: DuckDBClient,
+        *,
+        dataset_id: str,
+        llm: OpenAICompatClient | None = None,
+    ):
         self.client = client
+        self.dataset_id = dataset_id
         self.llm = llm or OpenAICompatClient()
 
     def ask(
@@ -195,7 +202,11 @@ class NLSQLChat:
     ) -> ChatResult:
         schema = self.client.schema()
         allowed = set(self.client.table_names())
-        history = history if history is not None else list_chat(self.client, limit=20)
+        history = (
+            history
+            if history is not None
+            else list_chat(self.dataset_id, limit=20, migrate_from=self.client)
+        )
 
         if sql_override:
             sql = assert_readonly_sql(sql_override, allowed_tables=allowed)
@@ -285,9 +296,9 @@ class NLSQLChat:
         )
 
         if persist and not sql_override:
-            append_chat(self.client, ChatTurn(role="user", content=message))
+            append_chat(self.dataset_id, ChatTurn(role="user", content=message))
             append_chat(
-                self.client,
+                self.dataset_id,
                 ChatTurn(
                     role="assistant",
                     content=summary,

@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sand.core.limits import check_data_dir_budget, check_file_size, limits_from_settings
 from sand.db.duckdb_client import DuckDBClient, sanitize_table_name
 from sand.db.pool import get_client
 from sand.ingest.readers import SUPPORTED_EXTENSIONS, list_xlsx_sheets, read_spreadsheet
-from sand.core.limits import check_data_dir_budget, check_file_size, limits_from_settings
 
 
 @dataclass
