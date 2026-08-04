@@ -26,10 +26,6 @@ class Limits(BaseModel):
     max_result_rows: int = Field(default=100_000, description="Max rows returned to Python/API")
     max_export_rows: int = Field(default=500_000, description="Max rows for CSV/XLSX export")
     max_materialize_rows: int = Field(default=2_000_000, description="Max rows for join materialization")
-    excel_pandas_max_bytes: int = Field(
-        default=50 * 1024 * 1024,
-        description="Legacy .xls still uses pandas; refuse larger workbooks",
-    )
     max_offline_ask_rows: int = Field(
         default=10_000,
         description="Max n/limit for top_n, groupby, and similar offline asks",
@@ -39,6 +35,7 @@ class Limits(BaseModel):
         description="Max total size of SAND data dir (0 disables)",
     )
     query_timeout_seconds: float = Field(default=30.0, description="DuckDB statement timeout")
+    chart_sample_rows: int = Field(default=5_000, description="Max rows loaded for chart rendering")
 
 
 def limits_from_settings(settings: Settings | None = None) -> Limits:
@@ -48,10 +45,10 @@ def limits_from_settings(settings: Settings | None = None) -> Limits:
         max_result_rows=s.max_result_rows,
         max_export_rows=s.max_export_rows,
         max_materialize_rows=s.max_materialize_rows,
-        excel_pandas_max_bytes=s.excel_pandas_max_bytes,
         max_offline_ask_rows=s.max_offline_ask_rows,
         max_data_dir_bytes=s.max_data_dir_bytes,
         query_timeout_seconds=s.query_timeout_seconds,
+        chart_sample_rows=s.chart_sample_rows,
     )
 
 

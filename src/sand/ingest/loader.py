@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from sand.core.limits import check_data_dir_budget, check_file_size, limits_from_settings
 from sand.db.duckdb_client import DuckDBClient, sanitize_table_name
 from sand.db.pool import get_client
-from sand.ingest.readers import SUPPORTED_EXTENSIONS, list_xlsx_sheets, read_spreadsheet
+from sand.ingest.readers import SUPPORTED_EXTENSIONS, list_xlsx_sheets
 
 
 @dataclass
@@ -98,7 +99,7 @@ def ingest_file(
 
 
 def ingest_files(
-    paths: list[str | Path],
+    paths: list[str | Path] | Sequence[str | Path],
     *,
     dataset_id: str | None = None,
     db_path: str | Path | None = None,
@@ -108,8 +109,8 @@ def ingest_files(
 ) -> IngestResult:
     """Ingest multiple spreadsheet files into one dataset.
 
-    CSV / Parquet / XLSX use DuckDB-native readers. Legacy ``.xls`` still uses
-    pandas with a stricter size guard.
+    CSV / Parquet / XLSX use DuckDB-native readers. Legacy ``.xls`` is not supported —
+    convert to ``.xlsx`` / CSV / Parquet first.
     """
     if not paths:
         raise ValueError("At least one spreadsheet path is required")
@@ -123,9 +124,10 @@ def ingest_files(
             raise FileNotFoundError(f"File not found: {path}")
         ext = path.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported file type '{ext}'")
-        max_bytes = limits.excel_pandas_max_bytes if ext == ".xls" else limits.max_ingest_bytes
-        check_file_size(path, max_bytes=max_bytes, label=path.name)
+            raise ValueError(
+                f"Unsupported file type '{ext}'. Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            )
+        check_file_size(path, max_bytes=limits.max_ingest_bytes, label=path.name)
 
     # Budget for new on-disk footprint (uploads already on disk; still caps growth)
     check_data_dir_budget(additional_bytes=sum(p.stat().st_size for p in path_objs))
@@ -238,43 +240,9 @@ def ingest_files(
                 )
             continue
 
-        # Legacy .xls — pandas path (size already guarded)
-        sheets = read_spreadsheet(path)
-        for sheet_name, df in sheets.items():
-            if override and len(sheets) == 1:
-                base = sanitize_table_name(override)
-            elif override and len(sheets) > 1:
-                base = sanitize_table_name(f"{override}_{sheet_name}")
-            elif len(sheets) > 1:
-                base = sanitize_table_name(f"{path.stem}_{sheet_name}")
-            else:
-                base = sanitize_table_name(path.stem)
-
-            name = _allocate_table_name(base, used_names, existing, if_exists=if_exists)
-            original_columns = [str(c) for c in df.columns]
-            if len(df) > limits.max_materialize_rows:
-                raise ValueError(
-                    f"Sheet '{sheet_name}' has {len(df):,} rows over SAND_MAX_MATERIALIZE_ROWS="
-                    f"{limits.max_materialize_rows:,}. Convert to CSV/XLSX/Parquet for native ingest."
-                )
-            row_count = client.write_dataframe(df, name, if_exists="replace")
-            client.register_table(
-                name,
-                source_file=str(path),
-                sheet_name=sheet_name,
-                original_columns=original_columns,
-                row_count=row_count,
-            )
-            existing.add(name)
-            tables.append(
-                TableInfo(
-                    name=name,
-                    sheet_name=sheet_name,
-                    row_count=row_count,
-                    columns=original_columns,
-                    source_file=str(path),
-                )
-            )
+        raise ValueError(
+            f"Unsupported file type '{ext}'. Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+        )
 
     result = IngestResult(
         dataset_id=dataset_id,

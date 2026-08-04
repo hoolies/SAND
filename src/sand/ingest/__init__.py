@@ -1,7 +1,7 @@
 """Ingest package."""
 
 from sand.ingest.loader import IngestResult, TableInfo, ingest_file, ingest_files
-from sand.ingest.readers import SUPPORTED_EXTENSIONS, read_spreadsheet
+from sand.ingest.readers import SUPPORTED_EXTENSIONS
 
 __all__ = [
     "SUPPORTED_EXTENSIONS",
@@ -9,5 +9,4 @@ __all__ = [
     "TableInfo",
     "ingest_file",
     "ingest_files",
-    "read_spreadsheet",
 ]

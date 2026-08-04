@@ -124,14 +124,14 @@ src/sand/
   db/            # DuckDB client + connection pool
   ingest/        # spreadsheet loaders
   queries/       # common asks, joins, predicates
-  charts/ llm/ jupyter/ samples/ web/
+  charts/ llm/ jupyter/ samples/ web/ (web/js modules)
 scripts/bootstrap.sh
 tests/
 ```
 
 ## Versioning
 
-Current release: **0.8.1**
+Current release: **0.8.2**
 
 - Patch `0.0.1` — small fixes, hardening, refactors that do not change API/behavior contracts
 - Minor `0.1.0` — new features, or changes that break callers/API/CLI

@@ -47,12 +47,12 @@ class Settings(BaseSettings):
     max_result_rows: int = 100_000
     max_export_rows: int = 500_000
     max_materialize_rows: int = 2_000_000
-    excel_pandas_max_bytes: int = 50 * 1024 * 1024  # legacy .xls only
     max_offline_ask_rows: int = 10_000
     max_data_dir_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GiB; 0 disables
     query_timeout_seconds: float = 30.0
     api_token: str = ""  # optional Bearer / X-SAND-Token for Docker publishes
     allow_insecure_bind: bool = False  # allow 0.0.0.0 without api_token
+    chart_sample_rows: int = 5_000  # max rows pulled into Python for charts
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

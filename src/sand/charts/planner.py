@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pandas as pd
 
 from sand.charts.specs import ChartSpec, ChartType
@@ -50,7 +52,7 @@ def plan_chart(df: pd.DataFrame, *, preferred: ChartType | None = None, title: s
     if preferred:
         x = time_cols[0] if preferred == "line" and time_cols else (cats[0] if cats else (df.columns[0] if len(df.columns) else None))
         y = nums[0] if nums else (df.columns[1] if len(df.columns) > 1 else None)
-        orientation = "h" if preferred == "bar" and cats and df[cats[0]].nunique() > 8 else "v"
+        orientation: Literal["v", "h"] = "h" if preferred == "bar" and cats and df[cats[0]].nunique() > 8 else "v"
         return ChartSpec(
             chart_type=preferred,
             title=title or f"{preferred.title()} chart",
@@ -91,14 +93,15 @@ def plan_chart(df: pd.DataFrame, *, preferred: ChartType | None = None, title: s
                 y=nums[0],
                 reason="Few categories with share-like values → pie (≤6 slices)",
             )
-        orientation = "h" if nunique > 8 else "v"
+        bar_orientation: Literal["v", "h"] = "h" if nunique > 8 else "v"
         return ChartSpec(
             chart_type="bar",
             title=title or f"{nums[0]} by {cats[0]}",
             x=cats[0],
             y=nums[0],
-            orientation=orientation,
-            reason="Category + metric → bar chart" + (" (horizontal for many categories)" if orientation == "h" else ""),
+            orientation=bar_orientation,
+            reason="Category + metric → bar chart"
+            + (" (horizontal for many categories)" if bar_orientation == "h" else ""),
         )
 
     # Wide numeric matrix → heatmap

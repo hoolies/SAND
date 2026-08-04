@@ -17,6 +17,19 @@
     <div class="active-dataset-badge">Active dataset: <strong id="active-dataset-label">none</strong></div>
   </header>
 
+  <div class="panel stack" style="margin: 0.75rem 1.75rem 0;">
+    <div class="row" style="align-items:end; gap:0.75rem; flex-wrap:wrap;">
+      <div>
+        <label for="api-token">API token (optional)</label>
+        <input id="api-token" type="password" placeholder="SAND_API_TOKEN" autocomplete="off" />
+      </div>
+      <button class="secondary small" id="save-token-btn" type="button">Save token</button>
+      <p class="hint" id="token-status" style="margin:0;"></p>
+    </div>
+    <p class="hint" id="auth-hint" style="display:none;margin:0.35rem 0 0;"></p>
+    <p class="hint" id="disk-usage" style="margin:0.35rem 0 0;"></p>
+  </div>
+
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="data" type="button">1. Data</button>
     <button class="tab" data-view="join" type="button">2. Join</button>
@@ -37,7 +50,7 @@
           </div>
           <div>
             <label for="file">Choose one or more CSV / Excel files</label>
-            <input id="file" type="file" accept=".csv,.xlsx,.xls,.parquet" multiple />
+            <input id="file" type="file" accept=".csv,.xlsx,.parquet" multiple />
             <ul class="file-list hint" id="file-list"></ul>
           </div>
           <label class="checkbox-row">
@@ -73,6 +86,7 @@
             <button class="secondary small" id="duplicate-btn" type="button">Duplicate dataset</button>
             <button class="secondary small" id="delete-dataset-btn" type="button">Delete dataset</button>
             <button class="secondary small" id="export-db-btn" type="button">Export DuckDB</button>
+            <button class="secondary small" id="checkpoint-btn" type="button">Checkpoint</button>
           </div>
           <div>
             <label>Tables in dataset (click to inspect)</label>
@@ -254,7 +268,7 @@
     </section>
   </main>
 
-  <script src="/static/app.js" defer></script>
+<script type="module" src="/static/js/main.js"></script>
 
 </body>
 </html>

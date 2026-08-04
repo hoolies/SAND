@@ -26,24 +26,42 @@ def _safe_dataset_id(value: str) -> str:
 
 @router.get("")
 def list_datasets() -> dict:
-    """List datasets.
+    """List datasets with disk usage against SAND_MAX_DATA_DIR_BYTES."""
+    from sand.core.limits import data_dir_usage_bytes, limits_from_settings
 
-    Response shape (not a bare array)::
-
-        {
-          "datasets": [{"id", "db_path", "tables"}, ...],
-          "orphans": [{"path", "stem"}, ...],  # legacy *.db files
-          "empty": bool,
-          "hint": str | null
-        }
-    """
     store = DatasetStore()
-    datasets = [{"id": d.id, "db_path": str(d.db_path), "tables": d.tables} for d in store.list_datasets()]
+    settings = get_settings()
+    limits = limits_from_settings(settings)
+    used = data_dir_usage_bytes(settings.data_dir)
+    budget = limits.max_data_dir_bytes
+    datasets = []
+    for d in store.list_datasets():
+        size = d.db_path.stat().st_size if d.db_path.exists() else 0
+        chat = settings.data_dir / f"{d.id}.chat.jsonl"
+        if chat.exists():
+            size += chat.stat().st_size
+        datasets.append(
+            {
+                "id": d.id,
+                "db_path": str(d.db_path),
+                "tables": d.tables,
+                "size_bytes": size,
+            }
+        )
     orphans = [{"path": str(o.path), "stem": o.stem} for o in store.list_orphan_sqlite()]
+    warn = None
+    if budget > 0 and used >= budget * 0.8:
+        warn = (
+            f"Data dir is at {used:,} / {budget:,} bytes "
+            f"({100.0 * used / budget:.0f}%). Delete datasets or raise SAND_MAX_DATA_DIR_BYTES."
+        )
     return {
         "datasets": datasets,
         "orphans": orphans,
         "empty": len(datasets) == 0,
+        "disk_usage_bytes": used,
+        "disk_budget_bytes": budget if budget > 0 else None,
+        "disk_warning": warn,
         "hint": "Load the sample shop dataset or upload CSV/Excel/Parquet files to get started."
         if not datasets
         else None,
@@ -59,7 +77,7 @@ async def _save_upload(upload: UploadFile, *, max_bytes: int) -> Path:
     if not upload.filename:
         raise HTTPException(status_code=400, detail=error_detail("bad_request", "Missing filename"))
     suffix = Path(upload.filename).suffix.lower()
-    if suffix not in {".csv", ".xlsx", ".xls", ".parquet"}:
+    if suffix not in {".csv", ".xlsx", ".parquet"}:
         raise HTTPException(status_code=400, detail=f"Unsupported type for {upload.filename}")
 
     stem = sanitize_filename_stem(Path(upload.filename).stem)
@@ -128,8 +146,7 @@ async def upload_dataset(
 
     try:
         for upload in uploads:
-            suffix = Path(upload.filename or "").suffix.lower()
-            max_bytes = limits.excel_pandas_max_bytes if suffix == ".xls" else limits.max_ingest_bytes
+            max_bytes = limits.max_ingest_bytes
             saved.append(await _save_upload(upload, max_bytes=max_bytes))
         result = ingest_files(
             saved,
@@ -174,8 +191,7 @@ async def add_table(
     limits = limits_from_settings(settings)
     saved: Path | None = None
     try:
-        suffix = Path(file.filename or "").suffix.lower()
-        max_bytes = limits.excel_pandas_max_bytes if suffix == ".xls" else limits.max_ingest_bytes
+        max_bytes = limits.max_ingest_bytes
         saved = await _save_upload(file, max_bytes=max_bytes)
         result = ingest_file(
             saved,
@@ -277,6 +293,19 @@ def duplicate_dataset(dataset_id: str, new_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise http_error_from_exc(exc) from exc
     return {"dataset_id": path.stem, "db_path": str(path)}
+
+
+@router.post("/{dataset_id}/checkpoint")
+def checkpoint_dataset(dataset_id: str) -> dict:
+    """Flush WAL into the main file (safe before copy/backup)."""
+    try:
+        client = open_dataset(dataset_id)
+        client.checkpoint()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise http_error_from_exc(exc) from exc
+    return {"dataset_id": dataset_id, "checkpointed": True}
 
 
 class RenameTableRequest(BaseModel):

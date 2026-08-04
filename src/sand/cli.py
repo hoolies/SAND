@@ -75,7 +75,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 def cmd_join(args: argparse.Namespace) -> int:
     from sand.core.config import get_settings
     from sand.db.pool import DatabaseLockedError, close_client, get_client
-    from sand.queries.joins import JoinSpec, execute_join
+    from sand.queries.joins import JoinKey, JoinSpec, execute_join
 
     settings = get_settings()
     db_path = settings.db_path(args.dataset)
@@ -83,7 +83,7 @@ def cmd_join(args: argparse.Namespace) -> int:
         print(f"Dataset not found: {args.dataset}", file=sys.stderr)
         return 1
 
-    on: list[str] = args.on
+    on: list[str | JoinKey] = list(args.on)
     spec = JoinSpec(
         left=args.left,
         right=args.right,

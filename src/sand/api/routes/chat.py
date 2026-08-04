@@ -133,11 +133,11 @@ def common_ask(body: CommonAskRequest) -> dict:
                     raise ValueError("column is required for top_n")
                 df = q.top_n(table, column=column, n=p.n, ascending=p.ascending)
             elif body.action == "groupby":
-                p = GroupByAskParams.model_validate(params)
-                group_by = p.group_by
+                gp = GroupByAskParams.model_validate(params)
+                group_by = gp.group_by
                 if isinstance(group_by, str):
                     group_by = [group_by]
-                metric = p.metric
+                metric = gp.metric
                 if not group_by:
                     group_by = [schema_cols[0]] if schema_cols else None
                 if not metric:
@@ -148,24 +148,24 @@ def common_ask(body: CommonAskRequest) -> dict:
                     table,
                     group_by=list(group_by),
                     metric=metric,
-                    agg=p.agg,
-                    limit=p.limit,
+                    agg=gp.agg,
+                    limit=gp.limit,
                 )
             elif body.action == "time_series":
-                p = TimeSeriesAskParams.model_validate(params)
-                date_column = p.date_column or next(
+                tp = TimeSeriesAskParams.model_validate(params)
+                date_column = tp.date_column or next(
                     (c for c in schema_cols if "date" in c.lower() or "time" in c.lower()),
                     None,
                 )
-                metric = p.metric or (schema_cols[-1] if schema_cols else None)
+                metric = tp.metric or (schema_cols[-1] if schema_cols else None)
                 if not date_column or not metric:
                     raise ValueError("time_series needs date_column and metric")
                 df = q.time_series(
                     table,
                     date_column=date_column,
                     metric=metric,
-                    agg=p.agg,
-                    bucket=p.bucket,
+                    agg=tp.agg,
+                    bucket=tp.bucket,
                 )
             else:
                 raise ValueError("action must be profile, missing, top_n, groupby, or time_series")

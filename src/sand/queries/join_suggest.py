@@ -8,7 +8,7 @@ from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
 
 from sand.db.duckdb_client import DuckDBClient
-from sand.queries.joins import JoinSpec, build_join_sql, execute_join
+from sand.queries.joins import JoinSpec, build_join_sql
 
 _ID_HINT = re.compile(r"(^id$|_id$|id$|code$|key$|sku$|uuid$)", re.IGNORECASE)
 
@@ -147,14 +147,8 @@ def estimate_join(client: DuckDBClient, spec: JoinSpec) -> JoinEstimate:
               ON {" AND ".join(f"l.{_qi(p.left)} = r.{_qi(p.right)}" for p in pairs)}
             """
         )[0][0]
-    except Exception:
-        # Fall back to pandas path estimate
-        try:
-            probe = JoinSpec(left=spec.left, right=spec.right, on=spec.on, how="inner", limit=None)
-            df, sql_preview = execute_join(client, probe)
-            estimated = len(df)
-        except Exception as exc:  # noqa: BLE001
-            warning = f"Could not estimate join size: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        warning = f"Could not estimate join size in DuckDB: {exc}"
 
     left_unique = left_distinct == left_rows and left_rows > 0
     right_unique = right_distinct == right_rows and right_rows > 0

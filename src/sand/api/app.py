@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,10 +26,15 @@ from sand.db.pool import close_all
 from sand.llm.openai_compat import OpenAICompatClient
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+logger = logging.getLogger("sand.api")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     yield
     close_all()
 
@@ -40,7 +48,7 @@ app = FastAPI(
         "413 limit_exceeded, 423 locked, 502 llm_upstream, 503 llm_not_configured|llm_unreachable, "
         "504 timeout, 410 deprecated."
     ),
-    version="0.8.1",
+    version="0.8.2",
     lifespan=lifespan,
 )
 
@@ -61,6 +69,24 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
         status_code=422,
         content={"detail": error_detail("validation_error", str(exc.errors()))},
     )
+
+
+@app.middleware("http")
+async def request_logging(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started) * 1000.0
+    logger.info(
+        "request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.middleware("http")

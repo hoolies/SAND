@@ -22,5 +22,4 @@ jobs:
       - name: Tests
         run: pytest -q
       - name: Mypy
-        continue-on-error: true
-        run: mypy
+        run: mypy src/sand

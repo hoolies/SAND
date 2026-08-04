@@ -187,7 +187,7 @@ def load(
     from sand.db.pool import get_client
 
     settings = get_settings()
-    native = {".csv", ".xlsx", ".xls", ".parquet"}
+    native = {".csv", ".xlsx", ".parquet"}
 
     if isinstance(path, (str, Path)):
         path_obj = Path(path)

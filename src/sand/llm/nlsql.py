@@ -243,39 +243,71 @@ class NLSQLChat:
             )
             raw = self.llm.complete(system, user)
             try:
-                payload = _extract_json(raw)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"LLM did not return valid JSON: {raw[:400]}") from exc
+                sql, summary, preferred = self._parse_llm_sql(raw, allowed=allowed, chart_type=chart_type)
+            except ValueError as guard_exc:
+                bad = ""
+                try:
+                    bad = str(_extract_json(raw).get("sql", ""))
+                except Exception:
+                    bad = raw[:500]
+                sql, summary, preferred = self._repair_sql(
+                    system=system,
+                    schema_prompt=_schema_prompt(schema),
+                    question=message,
+                    bad_sql=bad,
+                    error=str(guard_exc),
+                    allowed=allowed,
+                    chart_type=chart_type,
+                )
 
-            sql = assert_readonly_sql(str(payload.get("sql", "")), allowed_tables=allowed)
-            summary = str(payload.get("summary") or "Query complete.")
-            preferred = chart_type or payload.get("preferred_chart") or None
-            if preferred == "null":
-                preferred = None
+        from sand.core.limits import estimate_sql_rows, guard_result_rows, limits_from_settings
 
+        limits = limits_from_settings()
         sql_preview = with_eval_limit(sql, EVAL_LIMIT)
-        run_sql = sql if run_full else sql_preview
+        chart_cap = max(EVAL_LIMIT, int(limits.chart_sample_rows))
+        full_row_count: int | None = None
 
         if run_full:
-            from sand.core.limits import guard_result_rows, limits_from_settings
-
-            limits = limits_from_settings()
             guard_result_rows(self.client, sql, max_rows=limits.max_result_rows, action="full chat query")
-
-        df = self.client.to_dataframe(run_sql)
-
-        full_row_count = None
-        if not run_full:
             try:
-                from sand.core.limits import estimate_sql_rows
-
-                # Cap the COUNT probe so huge results don't hang the preview path
-                full_row_count = estimate_sql_rows(self.client, sql, probe_limit=100_000)
-                if full_row_count > 100_000:
-                    full_row_count = 100_000  # "at least" — UI shows as total estimate
+                full_row_count = estimate_sql_rows(self.client, sql, probe_limit=limits.max_result_rows)
             except Exception:
-                lim = find_limit_value(sql)
-                full_row_count = lim
+                full_row_count = find_limit_value(sql)
+            # Charts always load a capped sample — never the full result set into pandas
+            run_sql = with_eval_limit(sql, min(chart_cap, limits.max_result_rows))
+        else:
+            run_sql = sql_preview
+            try:
+                full_row_count = estimate_sql_rows(self.client, sql, probe_limit=100_000)
+                if full_row_count is not None and full_row_count > 100_000:
+                    full_row_count = 100_000
+            except Exception:
+                full_row_count = find_limit_value(sql)
+
+        try:
+            df = self.client.to_dataframe(run_sql)
+        except Exception as exec_exc:
+            if sql_override or not self.llm.is_configured:
+                raise
+            sql, summary, preferred = self._repair_sql(
+                system=(
+                    "You convert natural language questions into DuckDB SELECT queries.\n"
+                    "Return ONLY valid JSON with keys: sql, summary, preferred_chart.\n"
+                    "Fix the failed SQL. Read-only SELECT/WITH only; use only provided tables.\n"
+                ),
+                schema_prompt=_schema_prompt(schema),
+                question=message,
+                bad_sql=sql,
+                error=str(exec_exc),
+                allowed=allowed,
+                chart_type=chart_type,
+            )
+            sql_preview = with_eval_limit(sql, EVAL_LIMIT)
+            run_sql = sql if run_full else sql_preview
+            if run_full:
+                run_sql = with_eval_limit(sql, min(chart_cap, limits.max_result_rows))
+                guard_result_rows(self.client, sql, max_rows=limits.max_result_rows, action="full chat query")
+            df = self.client.to_dataframe(run_sql)
 
         if chart_override is not None:
             spec = chart_override
@@ -290,9 +322,9 @@ class NLSQLChat:
             chart=bundle,
             preview=bundle["preview"],
             row_count=bundle["row_count"],
-            evaluated_limit=EVAL_LIMIT if not run_full else bundle["row_count"],
+            evaluated_limit=EVAL_LIMIT if not run_full else min(chart_cap, bundle["row_count"]),
             is_preview=not run_full,
-            full_row_count=full_row_count if not run_full else bundle["row_count"],
+            full_row_count=full_row_count if full_row_count is not None else bundle["row_count"],
         )
 
         if persist and not sql_override:
@@ -311,3 +343,42 @@ class NLSQLChat:
                 ),
             )
         return result
+
+    def _parse_llm_sql(
+        self,
+        raw: str,
+        *,
+        allowed: set[str],
+        chart_type: ChartType | None,
+    ) -> tuple[str, str, Any]:
+        try:
+            payload = _extract_json(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM did not return valid JSON: {raw[:400]}") from exc
+        sql = assert_readonly_sql(str(payload.get("sql", "")), allowed_tables=allowed)
+        summary = str(payload.get("summary") or "Query complete.")
+        preferred = chart_type or payload.get("preferred_chart") or None
+        if preferred == "null":
+            preferred = None
+        return sql, summary, preferred
+
+    def _repair_sql(
+        self,
+        *,
+        system: str,
+        schema_prompt: str,
+        question: str,
+        bad_sql: str,
+        error: str,
+        allowed: set[str],
+        chart_type: ChartType | None,
+    ) -> tuple[str, str, Any]:
+        repair_user = (
+            f"Schema:\n{schema_prompt}\n\n"
+            f"Question: {question}\n\n"
+            f"Previous SQL failed validation/execution:\n{bad_sql}\n\n"
+            f"Error: {error}\n\n"
+            "Return corrected JSON only."
+        )
+        raw = self.llm.complete(system, repair_user)
+        return self._parse_llm_sql(raw, allowed=allowed, chart_type=chart_type)
